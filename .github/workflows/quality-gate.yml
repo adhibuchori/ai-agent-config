@@ -1,0 +1,51 @@
+name: Quality Gate
+
+on:
+  pull_request:
+    # dev is the review gate; prod re-runs it as a safety net on promotion.
+    # Diff steps use origin/${{ github.base_ref }}, so they follow it.
+    branches: [dev, prod]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Quality Gate
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+
+    # No services: block here on purpose — the unit tier never dials Postgres or
+    # Redis (see .claude/rules/common/testing.md). "Run Integration Tests" self-skips
+    # when DATABASE_URL is unset, which it is in this job. If you add a pipeline
+    # extra that needs a real database (see quality-gate.sh's "Pipeline extras"
+    # comment), add a services: block then — not before you need it.
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: postgresql+asyncpg://<user>:<password>@localhost:5432/<database-name>
+      REDIS_URL: redis://localhost:6379
+      # Every third-party credential your src/app/core/config.py validates needs a
+      # dummy entry here — z.string().min(1)-equivalent checks accept any non-empty
+      # string, they do not dial the vendor. A var exported in your shell but missing
+      # here passes locally and fails only in CI.
+      <PROVIDER>_API_KEY: ci-placeholder
+      <SERVICE>_SERVICE_TOKEN: ci-only-placeholder-secret-padded-to-32-chars
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      # CI=true on the runner enables strict mode: a check that cannot run
+      # fails the gate instead of silently passing. See quality-gate.sh.
+      - name: Quality Gate
+        run: .github/scripts/quality-gate.sh "origin/${{ github.base_ref }}"

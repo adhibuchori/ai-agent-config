@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install Dependencies
+        run: uv sync --frozen
+
+      - name: Format & Lint
+        run: uv run ruff format --check src tests && uv run ruff check src tests
+
+      - name: Type Check
+        run: uv run mypy src
+
+      - name: Import Boundaries
+        run: uv run lint-imports
+
+      - name: Unit Tests
+        run: uv run pytest tests -q --cov
+
+      - name: Docker Build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        run: docker build -t <repo-name> .

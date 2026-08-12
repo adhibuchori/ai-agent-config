@@ -1,0 +1,45 @@
+name: Update uv.lock for Dependabot PRs
+
+# Dependabot bumps pyproject.toml but never updates uv.lock, so CI's
+# `uv sync --frozen` rejects every one of its PRs on arrival.
+on:
+  pull_request:
+    branches: [dev]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dependabot-lockfile-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update-lockfile:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Regenerate uv.lock
+        run: uv lock
+
+      - name: Commit and push if the lockfile changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- uv.lock; then
+            echo "uv.lock already up to date."
+          else
+            # No skip-CI marker here: this push is what gives CI a working
+            # lockfile, so it must be allowed to trigger the re-run.
+            git add uv.lock
+            git commit -m "chore: update uv.lock"
+            git push
+          fi

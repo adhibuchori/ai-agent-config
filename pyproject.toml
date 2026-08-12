@@ -1,0 +1,127 @@
+[project]
+name = "<repo-name>"
+version = "0.1.0"
+description = "<one-line description>"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.52.1",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.15.0",
+    "sqlalchemy[asyncio]>=2.0.51",
+    "asyncpg>=0.30.0",
+    "structlog>=24.4.0",
+    "scalar-fastapi>=1.0.3",
+    "httpx>=0.27.0",
+    # Add your provider SDKs here (LLM/embedding/whatever this service wraps).
+    # See .claude/rules/backend/providers.example.md before adding one.
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.2",
+    "mypy>=1.13.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "import-linter>=2.1",
+    "pre-commit>=4.0.0",
+    "pip-audit>=2.7.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# If `db/session.py#get_engine()` is process-lifetime `@lru_cache`d, like the
+# real app, a function-scoped loop per test would reuse its connection pool
+# across event loops and crash with "Event loop is closed". Both the fixture
+# loop and the test loop must share the same scope. Delete this comment (but
+# keep the setting) once you've confirmed your own session module does this.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+markers = [
+    "integration: requires live Postgres/Redis — gated by RUN_INTEGRATION_TESTS=1",
+]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["src/app"]
+omit = ["src/app/main.py"]
+
+[tool.coverage.report]
+fail_under = 80
+
+[tool.importlinter]
+root_package = "app"
+include_external_packages = true
+
+# Rename the container list to your own modules. Keep all three contracts —
+# together they're what makes AGENTS.md §B a machine-checked boundary instead
+# of an advisory one. Add a new module to every contract below, not just one,
+# or its layering goes unchecked while CI stays green (see AGENTS.md's
+# "How to Add a New Module" section).
+
+[[tool.importlinter.contracts]]
+name = "Per-module layering: routes -> handlers -> service -> (repository)"
+type = "layers"
+layers = [
+    "routes",
+    "handlers",
+    "service",
+    "(repository)",
+]
+containers = [
+    "app.modules.<example>",
+]
+
+[[tool.importlinter.contracts]]
+name = "Core and providers never depend on modules (dependencies flow one way)"
+type = "forbidden"
+source_modules = ["app.core", "app.providers"]
+forbidden_modules = ["app.modules"]
+
+[[tool.importlinter.contracts]]
+name = "Modules only talk to each other through their package __init__"
+type = "independence"
+modules = [
+    "app.modules.<example>",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "I", "UP", "B", "SIM", "C4", "ASYNC", "RUF",
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+explicit_package_bases = true
+strict = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
