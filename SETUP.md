@@ -86,6 +86,29 @@ This is what the agent actually reaches for on every task. Hooks stop bad edits;
 well it works in the first place**, so it is worth ten minutes even though nothing breaks if you
 skip it.
 
+### Every tool by name, and where it is covered
+
+Search this table first — several tools below are discussed under generic headings, so their names
+only appear in prose.
+
+| Tool | What it is | Ships here? | Covered in |
+| :-- | :-- | :-- | :-- |
+| **Serena** | Semantic code search and edit over a language server | `.mcp.json` | [below](#serena--install-it-or-delete-the-rules-that-assume-it) |
+| **Context7** | Live library documentation lookup | `.mcp.json` | server table below |
+| **GitHub MCP** | Pull requests, issues, and reviews inside a session | `.mcp.json` | server table below |
+| **Postgres MCP** | Database schema, health, and query plans (`db-dev`, `db-prod`) | `.mcp.json` | server table below · `DATABASE.example.md` |
+| **Dokploy · Cloudflare · Hostinger** | Deployment, DNS, and VPS control | `.mcp.json` | server table below — delete if not your vendors |
+| **RTK** | Token-reducing shell proxy | **No** — machine-local | [Command wrappers](#command-wrappers--rtk-or-your-own) |
+| **Ponytail** | Context-trimming plugin | **No** — machine-local | [Plugins](#plugins--ponytail-or-your-own) |
+| **DeepSeek Code Review** | AI review comment on pull requests | `.github/workflows/` | [below](#ai-code-review-on-pull-requests--deepseek) · README § GitHub configuration |
+
+**react-doctor** and **impeccable** are frontend tools and are deliberately absent — a service with
+no browser interface has nothing for either to check. They ship with the frontend and docs-site
+layers.
+
+**`uv` is not in this table because it is not optional.** Every command in this layer — the gate,
+the hooks, the quality gates in `CLAUDE.md` — runs through it. See [Requirements](README.md#requirements).
+
 ### The servers in `.mcp.json`
 
 **Most projects should delete most of them.** Every connected server spends context on its tool
@@ -126,6 +149,47 @@ curl -LsSf https://astral.sh/uv/install.sh | sh   # gives you uvx; also what thi
 `.claude/SERENA-WORKSPACE.example.md` covers running one Serena project spanning several repos, so
 symbol search reaches all of them. Genuinely useful on a multi-repo product — e.g. this repo plus a
 sibling that owns the database schema — and pure overhead on a single repo.
+
+### Command wrappers — RTK, or your own
+
+If you route shell commands through a wrapper — a token-reducing proxy such as **RTK**, a sandbox,
+an audit recorder — declare it in `CLAUDE.md` § Command Wrapper **as a hard rule**, and prefix every
+command in that file with it.
+
+The reference project uses one, and it was stripped from this layer on purpose: it is machine-local
+tooling that a fresh clone will not have, and a rule pointing at a missing binary fails every
+command. The **shape** is left in place so you can slot yours in.
+
+Why it has to be a hard rule rather than a note: a wrapper mentioned in passing gets dropped the
+moment a task gets busy, and then half your commands are wrapped and half are not — which is worse
+than never wrapping at all, because the numbers stop meaning anything.
+
+> **One Python-specific caveat.** Every command in this layer is a `uv run …` invocation, so a
+> wrapper here nests: `<wrapper> uv run pytest …`. Confirm your wrapper passes the whole command
+> through rather than parsing only the first token — one that rewrites `uv` alone and drops its
+> arguments fails in a way that looks like a test failure, not a tooling failure.
+
+### Plugins — Ponytail, or your own
+
+`.claude/settings.json` ships with **no plugins enabled**, and that is deliberate rather than an
+oversight.
+
+The reference project runs one — **Ponytail**, which trims context — configured through
+`enabledPlugins` plus a couple of environment variables. It was removed here for the same reason as
+the command wrapper: a plugin declared but not installed is a startup error for everyone who clones
+this.
+
+If you use plugins, they go in the same file:
+
+```jsonc
+{
+  "enabledPlugins": { "<plugin>@<source>": true },
+  "env": { "<PLUGIN_SETTING>": "<value>" }
+}
+```
+
+Keep them out of `.claude/settings.local.json` if the whole team should get them, and in it if the
+choice is yours alone. The `.gitignore` here already excludes the local file.
 
 ### AI code review on pull requests — DeepSeek
 

@@ -18,6 +18,7 @@ Not advice about writing rules. The rules themselves, in the form that executes.
 ## Table of contents
 
 - [The problem this solves](#the-problem-this-solves)
+- [The four layers](#the-four-layers)
 - [What ships](#what-ships)
 - [Why this template and not be-agent-config](#why-this-template-and-not-be-agent-config)
 - [Repository structure](#repository-structure)
@@ -53,6 +54,26 @@ between, unenforced and assumed.
 
 ---
 
+## The four layers
+
+| Layer | File | Job | Size |
+| :-- | :-- | :-- | --: |
+| **Router** | `CLAUDE.md` | What to read for which task. Loaded every session, so kept short | 141 lines |
+| **Guardrail** | `AGENTS.md` | Numbered, citable rules, each naming its enforcement mechanism | 251 lines |
+| **Contract** | `SSOT.md` | Module structure, layer rules, environment variables | 129 lines |
+| **Machine** | `.claude/`, `.mcp.json` | Hooks, reviewer subagent, anti-patterns, rule tiers | 36 files |
+| **Gate** | `.github/` | The definition of "passing", enforced on every pull request | 6 workflows |
+
+The guardrail is the largest of the three documents, and that is the correct shape: provider
+behaviour, the error contract, and the security rules each need their failure mode spelled out,
+while the architecture itself is uniform enough that the contract states it once.
+
+**Do not normalise document length against a sibling template.** These numbers are the *unfilled*
+template's — yours will grow as you fill in the Compliance Status table and replace placeholders
+with real rules.
+
+---
+
 ## What ships
 
 ### Machine-checked layer boundaries
@@ -75,7 +96,8 @@ accumulated text as an answer.
 ```
 .claude/rules/
 ├── common/     8 files   language-agnostic — transfers as is
-└── backend/    3 files + 1 optional   FastAPI, performance, testing, + pipeline.example.md
+└── backend/    4 files + 1 optional   FastAPI, providers, performance, testing
+                                       + pipeline.example.md
 ```
 
 ### Reviewer subagent — one, not several
@@ -93,7 +115,7 @@ Two more steps — **Migration Drift Check** and **Docs Drift Check** — are do
 commented block in the same file, wired only if your repo owns a schema and runs Alembic. See
 [Why this template and not be-agent-config](#why-this-template-and-not-be-agent-config).
 
-### Slash commands — 9, maintained once
+### Slash commands — 8, maintained once
 
 Sources live in `_workflow-source/` and are mirrored into `.claude/commands/` and
 `.agent/workflows/` by `scripts/sync-workflows.sh`, with drift detection in `--check` mode.
@@ -139,11 +161,11 @@ ai-agent-config/
 │   ├── agents/                  ai-reviewer.md + INDEX.md
 │   ├── anti-patterns/           2 documented failures + INDEX.md
 │   ├── hooks/                   safety-check, auto-format, auto-lint + lib.sh
-│   ├── commands/                9 slash commands (generated)
+│   ├── commands/                8 slash commands (generated)
 │   └── *.example.md             3 optional shared docs — fill in or delete
 │
 ├── .agent/workflows/            Command mirror for a second tool (generated)
-├── _workflow-source/            9 command sources + INDEX.md — edit here
+├── _workflow-source/            8 command sources + INDEX.md — edit here
 │
 ├── scripts/
 │   └── sync-workflows.sh        Mirror commands, with --check drift mode

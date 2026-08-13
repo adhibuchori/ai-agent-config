@@ -1,18 +1,27 @@
+# Agent-local state — never commit
+.claude/settings.local.json
+.claude/session-logs/
+.serena/
+
+# Secrets
 .env
 .env.*
 !.env.*.example
+
+# Python tooling
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.import_linter_cache/
 .coverage
 htmlcov/
 dist/
 build/
 *.egg-info/
-.DS_Store
 
-# serena (tool cache, machine-local)
-.serena/
+# Misc
+.DS_Store
+*.log

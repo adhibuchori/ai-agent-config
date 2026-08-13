@@ -16,6 +16,18 @@ Spec: `/openapi.json`
 
 ---
 
+## Command Wrapper
+
+If you route terminal commands through a wrapper — a token-reducing proxy, a sandbox, a recorder —
+declare it here as a hard rule and prefix every command in this file with it. A wrapper mentioned
+only in passing gets dropped the moment a task gets busy. If you have no wrapper, the commands
+below are already correct.
+
+Note that every command here nests inside `uv run`, so a wrapper wraps the whole invocation
+(`<wrapper> uv run pytest …`), not just `uv`.
+
+---
+
 ## Quality Gates
 
 Must pass before marking any task done:
