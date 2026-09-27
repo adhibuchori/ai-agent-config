@@ -199,6 +199,10 @@ recorder), declare it in `CLAUDE.md` § Agent Tooling **as a hard rule**, prefix
 that file with it, and list it under `commandWrappers` in `.claude/agent-config.json` so the safety
 hook judges the command it wraps.
 
+RTK needs neither the rule nor an entry: its own hook adds the prefix, and `safety-check.sh` already
+reads `rtk <command>` and `rtk proxy <command>` as the command they run ([README § Using
+RTK](README.md#using-rtk)).
+
 None ships with this layer, on purpose: a wrapper is machine-local tooling a fresh clone will not
 have, and a rule pointing at a missing binary fails every command. It has to be a hard rule rather
 than a note, because a wrapper mentioned in passing gets dropped the moment a task gets busy, and

@@ -168,7 +168,7 @@ read as a script. Nesting deeper than six levels is refused rather than half rea
 
 `scripts/check/hook-probes.sh` proves every rule in both directions (what it must stop, what it
 must let through), plus each hook's fail mode, a linked git worktree and the plugin-mode project
-gate: 2,256 probes in this template. It runs at every commit that touches a hook and in CI. A rule
+gate: 2,330 probes in this template. It runs at every commit that touches a hook and in CI. A rule
 without a probe that fails when the rule is removed is a rule nobody has seen work.
 
 The analyzer reads text, so it cannot follow every path a command builds at run time. It refuses

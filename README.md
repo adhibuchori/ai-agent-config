@@ -59,7 +59,7 @@ every commit and on every pull request.
   [commands](#commands) · [agents](#agents) · [skills](#skills) · [rules](#rules) ·
   [checks and gates](#checks-and-gates) · [CI workflows](#ci-workflows) ·
   [config files](#config-files)
-- [Configuration](#configuration)
+- [Configuration](#configuration) · [Using RTK](#using-rtk)
 - [What gets blocked](#what-gets-blocked)
 - [Unlocking `.env` and the production DB](#unlocking-env-and-the-production-db)
 - [CI/CD](#cicd)
@@ -426,7 +426,7 @@ Every command below was run on a fresh folder; the outputs quoted are real.
    ```
 
 7. **Prove the hooks on your machine.** It ends with `hook probes: <n> passed, 0 failed`; on this
-   template today that is 2,256 probes. [See it in action](#see-it-in-action) shows how to feed one
+   template today that is 2,330 probes. [See it in action](#see-it-in-action) shows how to feed one
    hook a single command by hand.
 
    ```bash
@@ -505,8 +505,8 @@ your-repo/
 │
 ├── scripts/
 │   ├── check/                   gates.sh + gates.list, ai-config.sh + its probes,
-│   │                            hook-probes.sh + .tsv, skills.sh, folder-shape.mjs,
-│   │                            coverage-policy.mjs
+│   │                            hook-probes.sh + .tsv, skills.sh, secrets.sh,
+│   │                            folder-shape.mjs, coverage-policy.mjs
 │   ├── env/                     show.sh (masked), set.sh (only while unlocked), envfile.py
 │   ├── ops/                     unlock.sh (only you run it), pr-ready.sh (merge readiness)
 │   ├── sync/workflows.sh        Writes the command copies; --check finds drift
@@ -735,7 +735,7 @@ runs it again in CI with the checks that need a runner.
 | [`scripts/check/gates.sh`](scripts/check/gates.sh) | Runs every gate in `gates.list`, one log each, a table at the end and the tail of every failure | `bash scripts/check/gates.sh` (`--only TEXT`, `--paths P…`, `--fail-fast`) | One command answers "is this ready?" |
 | [`scripts/check/ai-config.sh`](scripts/check/ai-config.sh) | Every cited rule number exists in `AGENTS.md`; always-loaded context within 15,000 bytes; every wired hook exists, runs through `$CLAUDE_PROJECT_DIR` and reads no `CLAUDE_TOOL_INPUT_*` variable (they do not exist); every `npx`/`uvx` MCP server pinned to one release | `bash scripts/check/ai-config.sh` | `CLAUDE.md` stays short enough to be read; no stale rule citations |
 | [`scripts/check/ai-config-probes.sh`](scripts/check/ai-config-probes.sh) | Proves the MCP pin rule both ways, in a temp repo | `bash scripts/check/ai-config-probes.sh` | The pin check cannot quietly stop matching |
-| [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) + [`.tsv`](scripts/check/hook-probes.tsv) | Feeds every hook the JSON Claude Code sends and checks the exit code and message: 808 table rows for `safety-check.sh` (540 must block, 268 must pass), then the other hooks, their fail modes, a git worktree and plugin mode | `bash scripts/check/hook-probes.sh` | A hook that silently stopped blocking fails the gate |
+| [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) + [`.tsv`](scripts/check/hook-probes.tsv) | Feeds every hook the JSON Claude Code sends and checks the exit code and message: 845 table rows for `safety-check.sh` (569 must block, 276 must pass), then the other hooks, their fail modes, a git worktree and plugin mode | `bash scripts/check/hook-probes.sh` | A hook that silently stopped blocking fails the gate |
 | [`scripts/check/skills.sh`](scripts/check/skills.sh) | Scans commands, the subagent, hooks and any skills with SkillSpector pinned to one commit; `.skillspector-baseline.yaml` is its triage record | `bash scripts/check/skills.sh` (prints the pinned install if missing) | A prompt-injection line in a command is caught like a bad dependency |
 | [`scripts/check/folder-shape.mjs`](scripts/check/folder-shape.mjs) | Reports SHAPE-1 to SHAPE-4 violations | `node scripts/check/folder-shape.mjs` | Structure stays guessable as the repo grows |
 | [`scripts/check/coverage-policy.mjs`](scripts/check/coverage-policy.mjs) | Fails when the coverage gate itself was weakened: a threshold under 100, a logic folder out of scope, an exemption without a reason | `node scripts/check/coverage-policy.mjs` | 100% cannot quietly become 80% |
@@ -759,7 +759,7 @@ runs it again in CI with the checks that need a runner.
 | Dependency hygiene | `uv run deptry src` | ✓ | ✓ | ✓ |
 | Folder shape and coverage policy | `node scripts/check/{folder-shape,coverage-policy}.mjs` | ✓ | ✓ | ✓ |
 | Unit tests, 100% of lines and branches | `env -u PYTHONPATH uv run pytest tests -q --cov` | ✓ | ✓ | ✓ |
-| Secret scan | `gitleaks` | staged | history | history, pinned build |
+| Secret scan (gitleaks; fails when it is missing, warns off CI's pin) | `bash scripts/check/secrets.sh` | staged | staged | history, pinned build |
 | AI config: citations, budget, wiring, pins | `bash scripts/check/ai-config.sh` | ✓ | ✓ | ✓ |
 | Command mirrors in sync | `bash scripts/sync/workflows.sh --check` | ✓ | ✓ | ✓ |
 | MCP pin rule, proven both ways | `bash scripts/check/ai-config-probes.sh` | ✓ | ✓ | ✓ |
@@ -852,6 +852,21 @@ protected like this one) and `AGENT_HOOK_STATE_DIR` (where per-session hook stat
 The hook wiring, the permission lists and the sandbox live in `.claude/settings.json`
 ([config files](#config-files)). [Customize recipes](#customize-recipes) has tested examples of
 changing both.
+
+### Using RTK
+
+[RTK](https://github.com/rtk-ai/rtk) is an optional command-line proxy that shortens command output
+before the agent reads it; its Claude Code hook rewrites `git diff` into `rtk git diff`. This
+template never installs it and works the same without it.
+
+- **The guards see through it.** `safety-check.sh` reads `rtk <command>` and `rtk proxy <command>`
+  as the command they run, so `rtk git push --force origin main` is refused like the plain push. 37
+  rows in `scripts/check/hook-probes.tsv` prove it both ways.
+- **Exact-output steps bypass it.** A step that decides from what a command prints (an empty diff,
+  the whole diff a review reads, CI status) must see all of it, and RTK's summary can drop lines or
+  print one for an empty diff. The gates run inside scripts (`gates.sh`, `pr-ready.sh`,
+  `secrets.sh`), which RTK never rewrites; where a command or agent runs `git`, `grep` or `gh`
+  itself, it says to use `rtk proxy <command>` when RTK is installed.
 
 ## What gets blocked
 
@@ -1130,11 +1145,11 @@ matching plugin's setup command produces, as plain files you can read before you
   missing or hanging python3), and each feedback hook stays silent when it cannot help.
   [The fail-mode table](.claude/hooks/README.md#fail-modes) lists every case.
 - **Every rule is proven both ways.** The table in
-  [`scripts/check/hook-probes.tsv`](scripts/check/hook-probes.tsv) holds 808 rows that say what
-  `safety-check.sh` must block (540) and let through (268).
+  [`scripts/check/hook-probes.tsv`](scripts/check/hook-probes.tsv) holds 845 rows that say what
+  `safety-check.sh` must block (569) and let through (276).
   [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) runs that table and the probes for
   everything else: the other hooks, the config keys, the env helpers and the unlock, each hook's
-  fail modes, a linked git worktree and plugin mode. That is 2,256 probes, all passing under macOS
+  fail modes, a linked git worktree and plugin mode. That is 2,330 probes, all passing under macOS
   `/bin/bash` 3.2. The commit gate runs them whenever a hook, `settings.json` or the probes change.
 - **Layers, not one wall.** The hooks read command text. The `deny` rules in
   `.claude/settings.json` and the OS-enforced Bash sandbox back them up, and `.dockerignore` plus
@@ -1154,7 +1169,7 @@ matching plugin's setup command produces, as plain files you can read before you
 | Command and subagent descriptions Claude Code lists | 3,309 bytes for 15 commands and one subagent |
 | `safety-check.sh` on one command | about 130 ms (median): `git status`, a refused force-push and a piped test run landed within 108–110 ms before the guard-script rules, which add about 17% (old and new run side by side) |
 | The other hooks | `db-guard.sh`, `mcp-guard.sh`, `migration-guard.sh`, `post-edit.sh` with ruff: about 75–105 ms; `post-commit.sh` after a commit: about 145 ms; `prompt-intent.sh`, `session-start.sh`: about 45–70 ms |
-| The hook probes at a commit that touches a hook | 2,256 probes in about eight minutes (476 s on their own); the CI job allows 20 |
+| The hook probes at a commit that touches a hook | 2,330 probes in about nine and a half minutes (567 s on their own); the CI job allows 20 |
 | CI | pull requests only; nothing on push, nothing on a schedule, no update bot |
 
 Measured on an Apple M5 with macOS `/bin/bash` 3.2 and python3 3.14, median of 25 runs per hook,
@@ -1311,7 +1326,7 @@ narrow it in `.claude/agent-config.json` ([Configuration](#configuration)). Neve
 <details>
 <summary>Does it work with macOS's old bash 3.2?</summary>
 
-Yes. Every hook and script is written for bash 3.2, and the probe harness passes all 2,256 probes
+Yes. Every hook and script is written for bash 3.2, and the probe harness passes all 2,330 probes
 under macOS `/bin/bash` 3.2.57. macOS has no `timeout` command; the hooks stop slow work
 themselves. Run `/bin/bash scripts/check/hook-probes.sh` to prove it on your machine.
 

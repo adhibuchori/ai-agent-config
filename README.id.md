@@ -60,7 +60,7 @@ serangkaian pemeriksaan membuktikannya di setiap commit dan setiap pull request.
   [agen](#agen) · [skill](#skill) · [aturan](#aturan) ·
   [pemeriksaan dan gate](#pemeriksaan-dan-gate) · [workflow CI](#workflow-ci) ·
   [file konfigurasi](#file-konfigurasi)
-- [Konfigurasi](#konfigurasi)
+- [Konfigurasi](#konfigurasi) · [Memakai RTK](#memakai-rtk)
 - [Apa yang diblokir](#apa-yang-diblokir)
 - [Membuka kunci `.env` dan DB produksi](#membuka-kunci-env-dan-db-produksi)
 - [CI/CD](#cicd)
@@ -444,7 +444,7 @@ keluaran asli.
    ```
 
 7. **Buktikan hook-nya di mesin Anda.** Hasil akhirnya `hook probes: <n> passed, 0 failed`; di
-   template ini sekarang jumlahnya 2.256 probe. [Lihat cara kerjanya](#lihat-cara-kerjanya)
+   template ini sekarang jumlahnya 2.330 probe. [Lihat cara kerjanya](#lihat-cara-kerjanya)
    menunjukkan cara memberi satu hook satu perintah secara manual.
 
    ```bash
@@ -523,8 +523,8 @@ repo-anda/
 │
 ├── scripts/
 │   ├── check/                   gates.sh + gates.list, ai-config.sh + probe-nya,
-│   │                            hook-probes.sh + .tsv, skills.sh, folder-shape.mjs,
-│   │                            coverage-policy.mjs
+│   │                            hook-probes.sh + .tsv, skills.sh, secrets.sh,
+│   │                            folder-shape.mjs, coverage-policy.mjs
 │   ├── env/                     show.sh (tersamar), set.sh (hanya saat terbuka), envfile.py
 │   ├── ops/                     unlock.sh (hanya Anda yang menjalankan), pr-ready.sh
 │   ├── sync/workflows.sh        Menulis salinan perintah; --check mendeteksi pergeseran
@@ -762,7 +762,7 @@ membutuhkan runner.
 | [`scripts/check/gates.sh`](scripts/check/gates.sh) | Menjalankan setiap gate di `gates.list`, satu log per gate, tabel di akhir, dan ekor setiap kegagalan | `bash scripts/check/gates.sh` (`--only TEXT`, `--paths P…`, `--fail-fast`) | Satu perintah menjawab "sudah siap belum?" |
 | [`scripts/check/ai-config.sh`](scripts/check/ai-config.sh) | Setiap nomor aturan yang dikutip ada di `AGENTS.md`; konteks yang selalu dimuat maksimal 15.000 byte; setiap hook yang disambungkan ada, berjalan lewat `$CLAUDE_PROJECT_DIR`, dan tidak membaca variabel `CLAUDE_TOOL_INPUT_*` (variabel itu tidak ada); setiap server MCP `npx`/`uvx` di-pin ke satu rilis | `bash scripts/check/ai-config.sh` | `CLAUDE.md` tetap cukup pendek untuk dibaca; tidak ada kutipan aturan yang basi |
 | [`scripts/check/ai-config-probes.sh`](scripts/check/ai-config-probes.sh) | Membuktikan aturan pin MCP dari dua arah, di repo sementara | `bash scripts/check/ai-config-probes.sh` | Pemeriksaan pin tidak bisa diam-diam berhenti mendeteksi |
-| [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) + [`.tsv`](scripts/check/hook-probes.tsv) | Memberi setiap hook JSON yang dikirim Claude Code lalu memeriksa exit code dan pesannya: 808 baris tabel untuk `safety-check.sh` (540 harus diblokir, 268 harus lolos), lalu hook lain, mode gagalnya, git worktree, dan mode plugin | `bash scripts/check/hook-probes.sh` | Hook yang diam-diam berhenti memblokir menggagalkan gate |
+| [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) + [`.tsv`](scripts/check/hook-probes.tsv) | Memberi setiap hook JSON yang dikirim Claude Code lalu memeriksa exit code dan pesannya: 845 baris tabel untuk `safety-check.sh` (569 harus diblokir, 276 harus lolos), lalu hook lain, mode gagalnya, git worktree, dan mode plugin | `bash scripts/check/hook-probes.sh` | Hook yang diam-diam berhenti memblokir menggagalkan gate |
 | [`scripts/check/skills.sh`](scripts/check/skills.sh) | Memindai perintah, subagen, hook, dan skill apa pun dengan SkillSpector yang di-pin ke satu commit; `.skillspector-baseline.yaml` adalah catatan triasenya | `bash scripts/check/skills.sh` (mencetak cara instal yang di-pin jika belum terpasang) | Baris prompt injection di sebuah perintah tertangkap seperti dependensi yang buruk |
 | [`scripts/check/folder-shape.mjs`](scripts/check/folder-shape.mjs) | Melaporkan pelanggaran SHAPE-1 sampai SHAPE-4 | `node scripts/check/folder-shape.mjs` | Struktur tetap bisa ditebak seiring repo tumbuh |
 | [`scripts/check/coverage-policy.mjs`](scripts/check/coverage-policy.mjs) | Gagal jika gate cakupan itu sendiri dilemahkan: ambang di bawah 100, folder logika keluar dari cakupan, pengecualian tanpa alasan | `node scripts/check/coverage-policy.mjs` | 100% tidak bisa diam-diam menjadi 80% |
@@ -786,7 +786,7 @@ membutuhkan runner.
 | Kebersihan dependensi | `uv run deptry src` | ✓ | ✓ | ✓ |
 | Bentuk folder dan kebijakan cakupan | `node scripts/check/{folder-shape,coverage-policy}.mjs` | ✓ | ✓ | ✓ |
 | Tes unit, 100% baris dan cabang | `env -u PYTHONPATH uv run pytest tests -q --cov` | ✓ | ✓ | ✓ |
-| Pemindaian rahasia | `gitleaks` | yang di-stage | riwayat | riwayat, build yang di-pin |
+| Pemindaian rahasia (gitleaks; gagal bila tidak ada, memberi peringatan bila bukan pin CI) | `bash scripts/check/secrets.sh` | yang di-stage | yang di-stage | riwayat, build yang di-pin |
 | Konfigurasi AI: kutipan, anggaran, wiring, pin | `bash scripts/check/ai-config.sh` | ✓ | ✓ | ✓ |
 | Salinan perintah sinkron | `bash scripts/sync/workflows.sh --check` | ✓ | ✓ | ✓ |
 | Aturan pin MCP, dibuktikan dari dua arah | `bash scripts/check/ai-config-probes.sh` | ✓ | ✓ | ✓ |
@@ -881,6 +881,22 @@ disimpan).
 Wiring hook, daftar izin, dan sandbox ada di `.claude/settings.json`
 ([file konfigurasi](#file-konfigurasi)). [Resep kustomisasi](#resep-kustomisasi) berisi contoh
 yang sudah diuji untuk mengubah keduanya.
+
+### Memakai RTK
+
+[RTK](https://github.com/rtk-ai/rtk) adalah proxy command line opsional yang memendekkan output
+perintah sebelum dibaca agen; hook Claude Code miliknya menulis ulang `git diff` menjadi `rtk git
+diff`. Template ini tidak pernah memasangnya dan bekerja sama saja tanpanya.
+
+- **Guard melihat menembusnya.** `safety-check.sh` membaca `rtk <perintah>` dan `rtk proxy
+  <perintah>` sebagai perintah yang dijalankannya, jadi `rtk git push --force origin main` ditolak
+  sama seperti push biasa. 37 baris di `scripts/check/hook-probes.tsv` membuktikannya ke dua arah.
+- **Langkah yang butuh output persis melewatinya.** Langkah yang memutuskan dari apa yang dicetak
+  sebuah perintah (diff kosong, seluruh diff yang dibaca review, status CI) harus melihat semuanya,
+  sedangkan ringkasan RTK bisa membuang baris atau mencetak satu baris untuk diff kosong. Gate
+  berjalan di dalam skrip (`gates.sh`, `pr-ready.sh`, `secrets.sh`), yang tidak pernah ditulis ulang
+  RTK; bila sebuah command atau agen menjalankan `git`, `grep`, atau `gh` sendiri, ia meminta `rtk
+  proxy <perintah>` saat RTK terpasang.
 
 ## Apa yang diblokir
 
@@ -1180,11 +1196,11 @@ Anda baca sebelum mengadopsi apa pun.
   balik diam saja saat tidak bisa membantu. [Tabel mode gagal](.claude/hooks/README.md#fail-modes)
   mendaftar setiap kasusnya.
 - **Setiap aturan dibuktikan dari dua arah.** Tabel di
-  [`scripts/check/hook-probes.tsv`](scripts/check/hook-probes.tsv) berisi 808 baris yang menyatakan
-  apa yang harus diblokir (540) dan diloloskan (268) oleh `safety-check.sh`.
+  [`scripts/check/hook-probes.tsv`](scripts/check/hook-probes.tsv) berisi 845 baris yang menyatakan
+  apa yang harus diblokir (569) dan diloloskan (276) oleh `safety-check.sh`.
   [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) menjalankan tabel itu dan probe
   untuk semua hal lain: hook lainnya, key konfigurasi, helper env dan unlock, mode gagal setiap
-  hook, git worktree yang tertaut, dan mode plugin. Totalnya 2.256 probe, semuanya lolos di
+  hook, git worktree yang tertaut, dan mode plugin. Totalnya 2.330 probe, semuanya lolos di
   `/bin/bash` 3.2 macOS. Gate commit menjalankannya setiap kali hook, `settings.json`, atau
   probe-nya berubah.
 - **Berlapis, bukan satu tembok.** Hook membaca teks perintah. Aturan `deny` di
@@ -1206,7 +1222,7 @@ Anda baca sebelum mengadopsi apa pun.
 | Deskripsi perintah dan subagen yang didaftar Claude Code | 3.309 byte untuk 15 perintah dan satu subagen |
 | `safety-check.sh` untuk satu perintah | sekitar 130 md (median): `git status`, force-push yang ditolak, dan test run yang di-pipe berada di kisaran 108–110 md sebelum aturan skrip guard, yang menambah sekitar 17% (versi lama dan baru dijalankan berdampingan) |
 | Hook lainnya | `db-guard.sh`, `mcp-guard.sh`, `migration-guard.sh`, `post-edit.sh` dengan ruff: sekitar 75–105 md; `post-commit.sh` setelah commit: sekitar 145 md; `prompt-intent.sh`, `session-start.sh`: sekitar 45–70 md |
-| Probe hook pada commit yang menyentuh sebuah hook | 2.256 probe dalam sekitar delapan menit (476 detik jika dijalankan sendiri); job CI memberi batas 20 menit |
+| Probe hook pada commit yang menyentuh sebuah hook | 2.330 probe dalam sekitar sembilan setengah menit (567 detik jika dijalankan sendiri); job CI memberi batas 20 menit |
 | CI | hanya pull request; tidak ada saat push, tidak ada yang terjadwal, tidak ada bot pembaruan |
 
 Diukur di Apple M5 dengan `/bin/bash` 3.2 macOS dan python3 3.14, median dari 25 kali jalan per
@@ -1370,7 +1386,7 @@ Jangan pernah melonggarkan `settings.json` hanya untuk melewati satu penolakan.
 <details>
 <summary>Apakah bisa jalan di bash 3.2 bawaan macOS yang sudah tua?</summary>
 
-Bisa. Setiap hook dan skrip ditulis untuk bash 3.2, dan harness probe meloloskan ke-2.256 probe di
+Bisa. Setiap hook dan skrip ditulis untuk bash 3.2, dan harness probe meloloskan ke-2.330 probe di
 `/bin/bash` 3.2.57 macOS. macOS tidak punya perintah `timeout`; hook menghentikan pekerjaan yang
 lambat dengan sendirinya. Jalankan `/bin/bash scripts/check/hook-probes.sh` untuk membuktikannya di
 mesin Anda.
