@@ -144,5 +144,20 @@ FastAPI service. Rule numbers are this repo's `AGENTS.md`.
 - [ ] Every `# noqa` and `# type: ignore` carries its reason on the same line (Rule 25)
 - [ ] No database session is held open across a generation, and no `await` sits in a loop where a
       batch call exists (`.claude/rules/backend/performance.md`)
+- [ ] Input that reaches an embedding or completion call has a size cap, so one request cannot buy
+      an unbounded provider bill
+- [ ] A change to the embedding model, chunk size or overlap is treated as a corpus change: a
+      dimension migration and a full re-index ship with it, or it fails at query time, not at boot
+- [ ] Where the repo owns a pipeline: stages stay pure (no I/O in the transform stages), no stage
+      reaches into another's internals, an unchanged re-run writes zero rows, the failure path
+      still records the run, and a migration ships with every model change (drift gate:
+      `alembic upgrade head && alembic check`)
+- [ ] No secret, key or full provider payload reaches a log line
+
+**Machine first, in this stack.** Formatting is ruff's, types are mypy's (strict), layers are
+`lint-imports`', dependency advisories are `pip-audit`'s and secrets are gitleaks'; spend the review
+on provider behaviour, prompt and response handling, error shapes, and whether a test can run
+without the live provider. The reviewer subagent reports rule violations; do not ask it for
+refactors.
 
 </stack-block>

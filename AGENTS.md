@@ -285,6 +285,32 @@ reports SKIPPED, never passed, when that checkout is absent.
 
 ---
 
+## §P. Payload Contract (where adopted)
+
+Only where the repo adopted the module (a `payload.config.json` exists). The full contract and its
+threat model: `.claude/PAYLOAD-CONTRACT.md`; the short form loads from
+`.claude/rules/common/payload-contract.md`.
+
+**Rule 28 — Every body that crosses a service boundary is sealed**, unless its route is exempted in
+`payload.config.json` with a written reason. A half-policy is chosen by what the body needs
+(`response-only` for a multipart upload, `request-only` for an event stream), never by how sensitive
+it looks.
+
+**Rule 29 — No route path outside the registry.** Routes and their policies live in one registry
+dict, and a test walks `app.routes` against it; a route missing from it fails the registry test.
+
+**Rule 30 — Encrypt at the transport only.** `PayloadMiddleware` is added first (it runs innermost),
+replays the opened body as one message, and never invents `http.disconnect`. Nothing else imports
+`app.core.payload`.
+
+**Rule 31 — Keys are added, never repurposed**: one variable per hop, `<NAME>_NEXT` for rotation,
+never public, never printed or committed. Tests use placeholder bytes and the real cipher.
+
+**Rule 32 — The committed switch says `strict`.** Debug with `PAYLOAD_MODE=off` in your own shell;
+every service refuses `off` in production.
+
+---
+
 ## Core Files — Handle With Care
 
 | File | Why |

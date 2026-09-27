@@ -152,6 +152,7 @@ templates you do not use — an unfilled template is worse than none.
 | One Serena workspace spanning several repos | `.claude/SERENA-WORKSPACE.md` (from `SERENA-WORKSPACE.example.md`) |
 | Reviewing a change, before any commit | `.claude/docs/code-review-checklist.md` |
 | Known traps — scan the triggers before debugging | `.claude/anti-patterns/INDEX.md` |
+| Sealed bodies, the route registry and keys (where adopted) | `.claude/PAYLOAD-CONTRACT.md` |
 | A hook refused something, or its per-repo settings | `.claude/hooks/README.md` |
 | Unlocking `.env*` files or production writes | `docs/unlock.md` |
 | This repo owns its schema: Alembic, worker, CLI | `.claude/examples/pipeline/README.md` |
