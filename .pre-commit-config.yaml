@@ -48,7 +48,7 @@ repos:
         files: ^(src/.*\.py|pyproject\.toml|uv\.lock)$
       - id: gitleaks
         name: gitleaks (staged changes)
-        entry: gitleaks git --pre-commit --staged --redact --no-banner --config .gitleaks.toml
+        entry: bash scripts/check/secrets.sh
         language: system
         pass_filenames: false
 

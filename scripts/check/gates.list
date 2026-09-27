@@ -11,7 +11,7 @@ code	uv run deptry src
 code	node scripts/check/folder-shape.mjs
 code	node scripts/check/coverage-policy.mjs
 code	env -u PYTHONPATH uv run pytest tests -q --cov
-all	gitleaks git --redact --no-banner --config .gitleaks.toml
+all	bash scripts/check/secrets.sh
 all	bash scripts/check/ai-config.sh
 code	bash scripts/check/ai-config-probes.sh
 commands	bash scripts/sync/workflows.sh --check
