@@ -1,106 +1,76 @@
+# An AI review of each pull request into dev by DeepSeek, through agent-config-kit's reusable
+# workflow. It needs the DEEPSEEK_API_KEY secret (without it, it passes); README § CI/CD has the rest.
 name: DeepSeek Code Review
 
 on:
   pull_request:
-    # No `synchronize`: the action has no sticky comment, so every push would add
-    # another review. Re-run on demand with `/ask-deepseek` instead.
-    types: [opened, reopened]
-    # dev only. A dev -> prod diff re-adds the whole AI config that
-    # strip-ai-on-pr.yml removed, and GitHub answers 406 for a diff that size.
+    # dev only: a dev -> prod diff re-adds the AI config the strip removed.
+    types: [opened, reopened, ready_for_review]
     branches: [dev]
-  # On-demand: comment `/ask-deepseek` on a PR. GitHub runs this event from the
-  # workflow file on the default branch (prod), so edits reach comments once promoted.
+  # `/ask-deepseek` on a pull request. GitHub runs it from the default branch's copy of this file.
   issue_comment:
     types: [created]
-
-concurrency:
-  # issue_comment has no pull_request object — fall back to the issue number.
-  group: deepseek-review-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
+# A newer request replaces a running review; any other comment gets a group of its own.
+concurrency:
+  group: deepseek-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ (github.event_name == 'issue_comment' && !startsWith(github.event.comment.body, '/ask-deepseek')) && github.run_id || 'review' }}
+  cancel-in-progress: true
+
 jobs:
   deepseek-review:
     name: DeepSeek Code Review
-    # A branch of this repository (a fork's run has no secret), or `/ask-deepseek` from someone with
-    # write access. Any other comment starts no runner at all. SETUP.md § 4 has the full table.
+    # A branch of this repository (a fork's run gets no secret), or /ask-deepseek from an owner,
+    # member or collaborator. The job checks nothing out: it reads the diff over the API.
     if: >-
       (github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '/ask-deepseek') &&
+      startsWith(github.event.comment.body, '/ask-deepseek') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    # The action has no HTTP timeout, so a stalled DeepSeek API hangs the job until
-    # this kills it. Successful runs take under a minute.
-    timeout-minutes: 3
     permissions:
-      contents: read # the action reads the pull request's diff over the API
-      pull-requests: write # the action posts its review as a pull request comment
+      contents: read # read the pull request and its changed files over the API
+      pull-requests: write # post or update the one review comment
+    uses: adhibuchori/agent-config-kit/.github/workflows/deepseek-review.yml@8699a5bed2aa9d986c459f65b3e519c7bbe162d1 # v1.2.0
+    with:
+      # What this repository is and the rules no gate checks; lockfiles are always left out.
+      instructions: |
+        FastAPI service on Python, managed with
+        uv, type-checked with mypy, linted and formatted with ruff, and with
+        import boundaries enforced by lint-imports (importlinter).
 
-    steps:
-      # No actions/checkout: the action reads the diff over the API and runs no
-      # code from the pull request.
-      - name: DeepSeek Code Review
-        uses: hustcer/deepseek-review@eccde2e9781008d795e366b951e313e37af88dd5 # v1.21
-        with:
-          chat-token: ${{ secrets.DEEPSEEK_CODE_REVIEW_TOKEN }}
-          # The action ignores bots, non-PR issues, and anyone outside
-          # allowed-associations.
-          watch-mention: '/ask-deepseek'
-          allowed-associations: 'OWNER,MEMBER,COLLABORATOR'
-          model: deepseek-v4-pro
-          base-url: https://api.deepseek.com
-          temperature: '0.3'
-          # uv writes the lockfile, so reviewing it is noise. Add your generated paths (docs/*
-          # for the pipeline's Docs Drift Check); a hand edit to one is itself a finding.
-          exclude-patterns: 'uv.lock,*.lock'
-          sys-prompt: |
-            You are a code reviewer for a FastAPI service on Python, managed with
-            uv, type-checked with mypy, linted and formatted with ruff, and with
-            import boundaries enforced by lint-imports (importlinter).
+        What this repo is, so you do not invent findings: <one or two sentences —
+        what it reads/writes, who calls it, and whether it owns its database
+        schema or reads one owned elsewhere (AGENTS.md §D Rule 13)>.
 
-            What this repo is, so you do not invent findings: <one or two sentences —
-            what it reads/writes, who calls it, and whether it owns its database
-            schema or reads one owned elsewhere (AGENTS.md §D Rule 13)>.
+        Project rules that apply here, keyed to AGENTS.md:
+        - Layer boundaries are enforced mechanically by lint-imports. If a
+          diff adds an import that crosses a contract, say which contract.
+        - Never read os.environ directly; use the validated settings module.
+          Never log secrets or PII.
+        - Validate at system boundaries with Pydantic models, not ad-hoc dict
+          access. An unvalidated payload reaching business logic is a finding.
+        - Async correctness: no blocking call inside an async def (requests,
+          time.sleep, a sync DB driver), and no await inside a loop where the
+          work could run concurrently via asyncio.gather.
+        - Database work goes through the async session; watch for N+1 access
+          patterns, unbounded result sets, and a missing index on a new filter
+          or join predicate.
+        - Every new dependency must be added through uv, never pinned by hand
+          in a way uv.lock does not reflect.
 
-            Label every finding with a severity: CRITICAL (security or data-loss
-            risk — blocks merge), HIGH (bug or significant quality issue), MEDIUM
-            (maintainability concern), LOW (style or minor suggestion).
+        The CI that runs alongside this PR into dev covers formatting, linting,
+        type-checking, import boundaries, dead code, dependency hygiene, tests at
+        100% branch coverage, a secret scan and the Docker build. Do not repeat
+        those.
 
-            Project rules that apply here, keyed to AGENTS.md:
-            - Layer boundaries are enforced mechanically by lint-imports. If a
-              diff adds an import that crosses a contract, say which contract.
-            - Never read os.environ directly; use the validated settings module.
-              Never log secrets or PII.
-            - Validate at system boundaries with Pydantic models, not ad-hoc dict
-              access. An unvalidated payload reaching business logic is a finding.
-            - Async correctness: no blocking call inside an async def (requests,
-              time.sleep, a sync DB driver), and no await inside a loop where the
-              work could run concurrently via asyncio.gather.
-            - Database work goes through the async session; watch for N+1 access
-              patterns, unbounded result sets, and a missing index on a new filter
-              or join predicate.
-            - Every new dependency must be added through uv, never pinned by hand
-              in a way uv.lock does not reflect.
-
-            The CI that runs alongside this PR into dev covers formatting, linting,
-            type-checking, import boundaries, dead code, dependency hygiene, tests at
-            100% branch coverage, a secret scan and the Docker build. Do not repeat
-            those.
-
-            Security and correctness findings are in scope and are the most
-            valuable thing you can report. <Name the part of this domain where a
-            subtle defect is most expensive and fails silently rather than as an
-            error — e.g. a wrong distance operator, a mismatched dimension, a
-            miscounted retry.>
-
-            Report an issue only when you can name the input or state that triggers
-            it and what breaks as a result. Prefer a few well-evidenced findings
-            over broad coverage. If the diff is sound, say so briefly. Answer in
-            English, formatted as Markdown.
-          user-prompt: |
-            Review the following diff. Cite the file and line for every finding.
+        Security and correctness findings are in scope and are the most
+        valuable thing you can report. <Name the part of this domain where a
+        subtle defect is most expensive and fails silently rather than as an
+        error — e.g. a wrong distance operator, a mismatched dimension, a
+        miscounted retry.>
+    secrets:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}

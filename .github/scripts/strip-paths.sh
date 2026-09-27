@@ -10,7 +10,7 @@ set -f
 
 # The layer and its tools write every path here except .gemini and GEMINI.md, another agent's
 # config: nothing here creates them, and they stay listed so prod never ships one someone adds.
-STRIP_PATHS=".agent .agents .claude .gemini .serena _workflow-source GEMINI.md AGENTS.md CLAUDE.md SSOT.md .mcp.json .skillspector-baseline.yaml promote-deploy-logs"
+STRIP_PATHS=".agent .agents .claude .gemini .serena .impeccable _workflow-source AGENTS.md CLAUDE.md GEMINI.md SSOT.md PRODUCT.md PRODUCT.example.md DESIGN.md DESIGN.example.md skills-lock.json .mcp.json .skillspector-baseline.yaml .github/gemini.yaml .github/skills promote-deploy-logs"
 STRIP_GLOBS=""
 
 LIST="${STRIP_AI_LIST:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/stripped-paths.txt}"
