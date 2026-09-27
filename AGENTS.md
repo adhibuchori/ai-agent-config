@@ -40,7 +40,9 @@ module's routes/handlers/service) and follow it rather than inventing a new shap
 advisory.
 
 **Rule 2** — Minimal, surgical changes. Do not refactor code outside the task's scope in the
-same commit. Enforcement: advisory (code review).
+same commit. Reuse before writing, in this order: this codebase, the Python standard library,
+FastAPI's and Pydantic's built-ins, a dependency already in `pyproject.toml`; only then add a
+dependency or new code. Enforcement: advisory (code review).
 
 **Rule 3** — Commit format `type: description` (lowercase, imperative, no trailing period).
 Branch prefix `internal/{scope}` off `dev`. Enforcement: advisory.
