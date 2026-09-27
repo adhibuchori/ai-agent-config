@@ -16,15 +16,15 @@
 <stop offset="1" stop-color="#fce7f3"/>
 </linearGradient>
 <g clip-path="url(#cc)">
-<g class="blob"><circle cx="200" cy="200" r="150" fill="url(#ga)"/></g>
+<g class="blob"><circle cx="200" cy="180" r="150" fill="url(#ga)"/></g>
 <g class="blob blob2"><circle cx="1120" cy="40" r="110" fill="#fce7f3" opacity="1"/></g>
 <g class="blob blob3"><circle cx="1010" cy="345" r="70" fill="#e0f2fe" opacity="1"/></g>
 </g>
 <g class="tw tw1"><path d="M372,59Q375.1,66.9 383,70Q375.1,73.1 372,81Q368.9,73.1 361,70Q368.9,66.9 372,59Z" fill="#818cf8" opacity="1"/></g>
 <g class="tw tw2"><path d="M1060,141Q1062.5,147.5 1069,150Q1062.5,152.5 1060,159Q1057.5,152.5 1051,150Q1057.5,147.5 1060,141Z" fill="#f9a8d4" opacity="1"/></g>
-<g class="tw tw3"><path d="M96,292Q98.2,297.8 104,300Q98.2,302.2 96,308Q93.8,302.2 88,300Q93.8,297.8 96,292Z" fill="#7dd3fc" opacity="1"/></g>
+<g class="tw tw3"><path d="M96,272Q98.2,277.8 104,280Q98.2,282.2 96,288Q93.8,282.2 88,280Q93.8,277.8 96,272Z" fill="#7dd3fc" opacity="1"/></g>
 <g class="tw tw4"><path d="M1150,293Q1152,298 1157,300Q1152,302 1150,307Q1148,302 1143,300Q1148,298 1150,293Z" fill="#818cf8" opacity="1"/></g>
-<g transform="translate(72 78) scale(1.18)">
+<g transform="translate(72 58) scale(1.18)">
 <defs>
 <radialGradient id="mg" cx="50%" cy="60%" r="55%">
 <stop offset="0" stop-color="#a5b4fc"/>
@@ -72,7 +72,7 @@
 <path d="M170,166l7,7l13,-15" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="158" cy="170" r="9.5" fill="#fff1e6" stroke="#1c1a15" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round"/>
 </g>
-<g transform="translate(250 44) scale(0.9)">
+<g transform="translate(250 24) scale(0.9)">
 <path d="M8,20a14,14 0 0 1 14,-14h52a14,14 0 0 1 14,14v28a14,14 0 0 1 -14,14h-34l-16,14v-14h-2a14,14 0 0 1 -14,-14z" fill="#e0e7ff" stroke="#1c1a15" stroke-width="3" stroke-linejoin="round"/>
 <circle cx="32" cy="34" r="4.5" fill="#4f46e5"/>
 <circle cx="48" cy="34" r="4.5" fill="#818cf8"/>
@@ -81,14 +81,14 @@
 <g class="tw tw6"><path d="M98,-2Q100.2,3.8 106,6Q100.2,8.2 98,14Q95.8,8.2 90,6Q95.8,3.8 98,-2Z" fill="#818cf8" opacity="1"/></g>
 <g class="tw tw7"><path d="M70,82Q71.7,86.3 76,88Q71.7,89.7 70,94Q68.3,89.7 64,88Q68.3,86.3 70,82Z" fill="#7dd3fc" opacity="1"/></g>
 </g>
-<text class="s" x="400" y="168" font-size="64" font-weight="800" fill="#1c1a15">ai-agent-config</text>
-<text class="s" x="402" y="214" font-size="23" font-weight="500" fill="#57534a">Guardrails for FastAPI + LLM services — for Claude Code</text>
-<rect x="402" y="248" width="206.5" height="32" rx="16.0" fill="#fce7f3" stroke="#fbcfe8" stroke-width="1.5"/>
-<text class="s" x="505.2" y="269.6" font-size="16" font-weight="600" fill="#1c1a15" text-anchor="middle">plugin: agent-ai-fastapi</text>
-<rect x="618.5" y="248" width="73.7" height="32" rx="16.0" fill="#e0e7ff" stroke="#c7d2fe" stroke-width="1.5"/>
-<text class="s" x="655.4" y="269.6" font-size="16" font-weight="600" fill="#1c1a15" text-anchor="middle">hooks</text>
-<rect x="702.2" y="248" width="65.7" height="32" rx="16.0" fill="#e0f2fe" stroke="#bae6fd" stroke-width="1.5"/>
-<text class="s" x="735.1" y="269.6" font-size="16" font-weight="600" fill="#1c1a15" text-anchor="middle">rules</text>
-<rect x="777.9" y="248" width="90.2" height="32" rx="16.0" fill="#fce7f3" stroke="#fbcfe8" stroke-width="1.5"/>
-<text class="s" x="823.0" y="269.6" font-size="16" font-weight="600" fill="#1c1a15" text-anchor="middle">CI gates</text>
+<text class="s" x="400" y="148" font-size="64" font-weight="800" fill="#1c1a15">ai-agent-config</text>
+<text class="s" x="402" y="194" font-size="23" font-weight="500" fill="#57534a">Guardrails for FastAPI + LLM services — for Claude Code</text>
+<rect x="402" y="228" width="206.5" height="32" rx="16.0" fill="#fce7f3" stroke="#fbcfe8" stroke-width="1.5"/>
+<text class="s" x="505.2" y="249.6" font-size="16" font-weight="600" fill="#1c1a15" text-anchor="middle">plugin: agent-ai-fastapi</text>
+<rect x="618.5" y="228" width="73.7" height="32" rx="16.0" fill="#e0e7ff" stroke="#c7d2fe" stroke-width="1.5"/>
+<text class="s" x="655.4" y="249.6" font-size="16" font-weight="600" fill="#1c1a15" text-anchor="middle">hooks</text>
+<rect x="702.2" y="228" width="65.7" height="32" rx="16.0" fill="#e0f2fe" stroke="#bae6fd" stroke-width="1.5"/>
+<text class="s" x="735.1" y="249.6" font-size="16" font-weight="600" fill="#1c1a15" text-anchor="middle">rules</text>
+<rect x="777.9" y="228" width="90.2" height="32" rx="16.0" fill="#fce7f3" stroke="#fbcfe8" stroke-width="1.5"/>
+<text class="s" x="823.0" y="249.6" font-size="16" font-weight="600" fill="#1c1a15" text-anchor="middle">CI gates</text>
 </svg>
