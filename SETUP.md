@@ -257,7 +257,7 @@ another review: comment `/ask-deepseek` to re-run it.
 `.claude/settings.json` already wires them. Prove they work on your machine:
 
 ```bash
-bash scripts/check/hook-probes.sh   # about three minutes; on macOS, /bin/bash proves bash 3.2
+bash scripts/check/hook-probes.sh   # about eight minutes; on macOS, /bin/bash proves bash 3.2
 ```
 
 It ends with `hook probes: <n> passed, 0 failed`, having fed every rule a command it must stop and
@@ -306,6 +306,11 @@ file with `bash scripts/env/show.sh <file>` (secrets masked) and changes a value
 itself. [`docs/unlock.md`](docs/unlock.md) explains both targets (`env`, `db`) and what the lock
 does not stop.
 
+**The guards cannot be rewritten from the shell.** Claude's shell may read the hooks,
+`scripts/check/hook-probes.*`, `scripts/ops/unlock.sh`, `scripts/env/` and the settings that turn
+the guards on, and run the hooks and probes, but not change, move or delete any of them by a route
+the analyzer can read. A change goes through the Edit tool, which asks you first, or your own `!`.
+
 **Wrappers and package runners are unwrapped.** `env`, `sudo`, `timeout`, `xargs` and the other
 common wrappers, and `npx`, `bunx`, `pnpx` and `npm`/`pnpm`/`yarn`/`bun` `exec`, `dlx` and `x`, are
 peeled: the command inside is judged, and a `-c` string or the words of `bun exec` and `yarn exec`
@@ -315,7 +320,7 @@ are judged as a script. A wrapper of your own goes under `commandWrappers` in
 **What the guard cannot resolve, it refuses.** When `safety-check.sh` cannot tell what a command
 touches (computed or decoded code, a `$( )` used as the command or as a file name, a path built
 through `IFS` or an array, a package runner's command or script built from `$( )` or an unknown
-variable, inline code that opens a file, and the rest of the list in
+variable, inline code that opens or changes a file or runs a command, and the rest of the list in
 [README § What gets blocked](README.md#what-gets-blocked)), it exits 2 with the reason and the hint
 to run the command yourself with `!`. So is a git setting that changes what git runs or loads (an
 alias, an include, `core.sshCommand`, a credential helper, a proxy, `url.*.insteadOf`), whatever
@@ -328,8 +333,9 @@ type them with `!` when you mean them. Without python3 only a few plain-text rul
 **The Bash sandbox is on by default.** `.claude/settings.json` turns on
 [Claude Code's sandbox](https://code.claude.com/docs/en/sandboxing) (`sandbox.enabled: true`),
 which the operating system enforces for every sandboxed command: it denies reading `.env*` files
-(templates excepted) and the `.env` backups, and writing under `.claude/state/unlock/`. Only
-`scripts/env/show.sh` and `scripts/env/set.sh` run outside it. Its limits, and how to turn it off:
+(templates excepted) and the `.env` backups, and writing under `.claude/state/unlock/` or
+`.claude/hooks/` or to `scripts/ops/unlock.sh`. Only `scripts/env/show.sh` and `scripts/env/set.sh`
+run outside it. Its limits, and how to turn it off:
 
 - **Platforms.** macOS needs nothing; Linux and WSL2 need `bubblewrap` and `socat`. WSL1 and native
   Windows are not supported. Where the sandbox cannot start, Claude Code warns and runs commands

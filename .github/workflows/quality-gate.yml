@@ -18,7 +18,7 @@ jobs:
     name: Quality Gate
     # The job a developer waits on takes the fast pool when one is set (.claude/CI-RUNNERS.md).
     runs-on: ${{ vars.CI_RUNNER_FAST || vars.CI_RUNNER || 'ubuntu-latest' }}
-    # The hook probes alone take about three minutes; a hung step stops here, not at the cap.
+    # The hook probes alone take about eight minutes; a hung step stops here, not at the cap.
     timeout-minutes: 20
 
     # No services: the unit tier never dials Postgres or Redis, and the integration step collects

@@ -168,7 +168,7 @@ read as a script. Nesting deeper than six levels is refused rather than half rea
 
 `scripts/check/hook-probes.sh` proves every rule in both directions (what it must stop, what it
 must let through), plus each hook's fail mode, a linked git worktree and the plugin-mode project
-gate: 1,772 probes in this template. It runs at every commit that touches a hook and in CI. A rule
+gate: 2,256 probes in this template. It runs at every commit that touches a hook and in CI. A rule
 without a probe that fails when the rule is removed is a rule nobody has seen work.
 
 The analyzer reads text, so it cannot follow every path a command builds at run time. It refuses
@@ -266,14 +266,15 @@ is refused. `db-guard.sh` holds every production SQL write until `db` is unlocke
   anyone remembering to close it.
 - **Why a sandbox under the hooks.** The hooks judge a command line; the sandbox judges what the
   process actually opens. `sandbox.filesystem.denyRead` covers every `.env*` shape and the `.env`
-  backups, `denyWrite` covers `.claude/state/unlock/`, and only `show.sh` and `set.sh` run outside
-  it, so a route the analyzer never saw still cannot read a secret or forge an unlock. It is on by
-  default (`sandbox.enabled: true`) and needs macOS, or Linux or WSL2 with `bubblewrap` and
-  `socat`; WSL1 and native Windows have none. Where it cannot start, Claude Code warns and runs
-  commands without it unless `sandbox.failIfUnavailable` is `true`, and the hooks alone apply. A
-  command that fails inside it may be retried outside through the permission prompt
-  (`sandbox.allowUnsandboxedCommands: false` forbids that), and `"sandbox": {"enabled": false}` in
-  `.claude/settings.json` or `.claude/settings.local.json` turns it off.
+  backups, `denyWrite` covers `.claude/state/unlock/`, `.claude/hooks/` and `scripts/ops/unlock.sh`,
+  and only `show.sh` and `set.sh` run outside it, so a route the analyzer never saw still cannot
+  read a secret, forge an unlock or rewrite a guard. It is on by default (`sandbox.enabled: true`)
+  and needs macOS, or Linux or WSL2 with `bubblewrap` and `socat`; WSL1 and native Windows have
+  none. Where it cannot start, Claude Code warns and runs commands without it unless
+  `sandbox.failIfUnavailable` is `true`, and the hooks alone apply. A command that fails inside it
+  may be retried outside through the permission prompt (`sandbox.allowUnsandboxedCommands: false`
+  forbids that), and `"sandbox": {"enabled": false}` in `.claude/settings.json` or
+  `.claude/settings.local.json` turns it off.
 - **Why the database server still starts read-only.** `--access-mode=restricted` is enforced by the
   server, below any hook, and it also stops a function of your own that writes behind a `SELECT`.
   `db-guard.sh` is for a project that deliberately gives the production server write access for

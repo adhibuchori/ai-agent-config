@@ -426,7 +426,7 @@ Every command below was run on a fresh folder; the outputs quoted are real.
    ```
 
 7. **Prove the hooks on your machine.** It ends with `hook probes: <n> passed, 0 failed`; on this
-   template today that is 1,772 probes. [See it in action](#see-it-in-action) shows how to feed one
+   template today that is 2,256 probes. [See it in action](#see-it-in-action) shows how to feed one
    hook a single command by hand.
 
    ```bash
@@ -735,7 +735,7 @@ runs it again in CI with the checks that need a runner.
 | [`scripts/check/gates.sh`](scripts/check/gates.sh) | Runs every gate in `gates.list`, one log each, a table at the end and the tail of every failure | `bash scripts/check/gates.sh` (`--only TEXT`, `--paths P…`, `--fail-fast`) | One command answers "is this ready?" |
 | [`scripts/check/ai-config.sh`](scripts/check/ai-config.sh) | Every cited rule number exists in `AGENTS.md`; always-loaded context within 15,000 bytes; every wired hook exists, runs through `$CLAUDE_PROJECT_DIR` and reads no `CLAUDE_TOOL_INPUT_*` variable (they do not exist); every `npx`/`uvx` MCP server pinned to one release | `bash scripts/check/ai-config.sh` | `CLAUDE.md` stays short enough to be read; no stale rule citations |
 | [`scripts/check/ai-config-probes.sh`](scripts/check/ai-config-probes.sh) | Proves the MCP pin rule both ways, in a temp repo | `bash scripts/check/ai-config-probes.sh` | The pin check cannot quietly stop matching |
-| [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) + [`.tsv`](scripts/check/hook-probes.tsv) | Feeds every hook the JSON Claude Code sends and checks the exit code and message: 598 table rows for `safety-check.sh` (402 must block, 196 must pass), then the other hooks, their fail modes, a git worktree and plugin mode | `bash scripts/check/hook-probes.sh` | A hook that silently stopped blocking fails the gate |
+| [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) + [`.tsv`](scripts/check/hook-probes.tsv) | Feeds every hook the JSON Claude Code sends and checks the exit code and message: 808 table rows for `safety-check.sh` (540 must block, 268 must pass), then the other hooks, their fail modes, a git worktree and plugin mode | `bash scripts/check/hook-probes.sh` | A hook that silently stopped blocking fails the gate |
 | [`scripts/check/skills.sh`](scripts/check/skills.sh) | Scans commands, the subagent, hooks and any skills with SkillSpector pinned to one commit; `.skillspector-baseline.yaml` is its triage record | `bash scripts/check/skills.sh` (prints the pinned install if missing) | A prompt-injection line in a command is caught like a bad dependency |
 | [`scripts/check/folder-shape.mjs`](scripts/check/folder-shape.mjs) | Reports SHAPE-1 to SHAPE-4 violations | `node scripts/check/folder-shape.mjs` | Structure stays guessable as the repo grows |
 | [`scripts/check/coverage-policy.mjs`](scripts/check/coverage-policy.mjs) | Fails when the coverage gate itself was weakened: a threshold under 100, a logic folder out of scope, an exemption without a reason | `node scripts/check/coverage-policy.mjs` | 100% cannot quietly become 80% |
@@ -873,6 +873,13 @@ changing both.
   shell, `source`, a copy or link, a glob, a wrapper, a package runner, a git alias or `find -exec`;
   writing, linking or deleting anything in `.claude/state/unlock/`; changing the `scripts/env/`
   helpers.
+- **The guards themselves.** Any shell change to the hooks in `.claude/hooks/`, the probes that
+  prove them (`scripts/check/hook-probes.*`), `scripts/ops/unlock.sh`, the `scripts/env/` helpers
+  or the files that turn the guards on (`.claude/settings.json`, `settings.local.json`,
+  `agent-config.json`): deleting, moving, linking, overwriting, truncating, `chmod`, editing in
+  place (`sed -i`, `perl -i`, a `sed` `w`, an `awk` `print >`, inline code) or checking out over
+  them, and the same for a folder that holds them. Reading, running and copying them out stay
+  open; a change goes through the Edit tool, which asks you first, or your own `!`.
 - **Git settings that change what git runs or loads**, whatever their value: an alias, an include,
   a key that carries a command (`core.sshCommand`, `core.fsmonitor`, a pager or editor that is not
   a plain viewer, a credential helper), `protocol.*.allow`, a proxy, `url.*.insteadOf`,
@@ -889,6 +896,7 @@ changing both.
 | `--no-verify`, `HUSKY=0`, a repointed `core.hooksPath` | `safety-check.sh` | fix what the gate reports | none |
 | A shell read or write of a real `.env*` file | `safety-check.sh`, sandbox, deny rules | `scripts/env/show.sh`; `set.sh` after you unlock `env` | none; the sandbox can be turned off |
 | Claude running the unlock | `safety-check.sh` | you run `! ./scripts/ops/unlock.sh env` | none |
+| A shell change to a hook, the probes, `unlock.sh`, `scripts/env/` or the settings that turn the guards on | `safety-check.sh`, sandbox | the Edit tool, which asks you first; or you run it with `!` | none |
 | A production SQL write | `db-guard.sh` | you run `! ./scripts/ops/unlock.sh db`, or run the statement yourself | `dbWriteGuard`, or keep the server read-only |
 | A hand edit of an Alembic revision | `migration-guard.sh` | generate a new revision | `"migrationsDirs": []` |
 | `alembic downgrade` | `safety-check.sh` | a new forward migration | none: run it yourself with `!` |
@@ -912,17 +920,20 @@ access, outside the hooks and (in an ordinary session) outside the sandbox:
 | A substitution as the command or a file | `$( )` or backticks as the command name, or as a file a reader or writer opens |
 | A path built at run time | `IFS` splitting, `shopt -s dotglob`, a bash array, a `printf` substitution |
 | A runner's command built at run time | `npx "$(…)"`, `bun exec "$CMD"` with an unknown variable, `make -f /dev/stdin`, a `just` or `task` recipe from stdin |
-| Inline code that touches files | `python -c` or `node -e` code that opens, lists or builds a path |
+| Inline code that touches files | `python -c` or `node -e` code that opens, lists, builds, changes or deletes a path, or runs a command |
+| A program that names its file inside its code | a `sed` `w`, `r` or `e`, an `awk` `print >`, `getline <` or `system()` whose file or command is only known at run time, or that cannot be read |
 | A copy onto a protected place | a copy, move, link or archive that lands on `.claude/state/` or a `.env*` file |
 | `xargs` feeding a file reader | `ls \| xargs cat` |
+| Paths handed to a command that changes files | `find . -name '*.sh' \| xargs chmod 000`, `f=$(find …); rm "$f"`, `find -exec` running a changer over a guarded tree |
 
 Refusing too much is the point, so some ordinary commands stop here too (`head $(ls -t …)`,
 `git ls-files | xargs cat`); run those with `!`. A literal `git ls-files '<pathspec>'` inside
 `$( )` stays allowed, so `cat $(git ls-files '*.md')` works.
 
 **Without python3** only a few plain-text rules stand in: protected pushes, recursive deletes, a
-hard reset or forced clean, a skipped gate, `.env*` names, the unlock and `scripts/env/`. Claude is
-told so, and everything else runs unchecked on that machine, so install python3.
+hard reset or forced clean, a skipped gate, `.env*` names, the unlock, `scripts/env/`, the files
+that turn the guards on and the guard scripts. Claude is told so, and everything else runs
+unchecked on that machine, so install python3.
 
 ### The sandbox layer
 
@@ -934,7 +945,7 @@ children, where a text check cannot reach:
 - `sandbox.filesystem.denyRead` covers every `.env*` shape at any depth (`.envrc` included) and the
   `.env` backups; `allowRead` opens the `*.example` templates again.
 - `sandbox.filesystem.denyWrite` covers `.claude/state/unlock/`, so no sandboxed command can forge
-  an unlock.
+  an unlock, and `.claude/hooks/` and `scripts/ops/unlock.sh`, so none can rewrite a guard.
 - `sandbox.excludedCommands` lets only `scripts/env/show.sh` and `scripts/env/set.sh` run outside
   it, since they must reach `.env` files.
 
@@ -963,8 +974,13 @@ Its limits, and how to turn it off:
   `parallel`, or `dotenvx` until you list it) is judged by name only. Where the sandbox runs, it
   still holds the `.env*` and unlock files against it.
 - **Without python3** only the plain-text rules above run.
-- **The hooks are files in the repo.** A change to them changes what they refuse, so review
-  changes under `.claude/` like any other code.
+- **The Edit tool can change the hooks.** The shell cannot, but a file edit is how code changes:
+  `.claude/settings.json` asks you before every edit to a hook, the probes, `unlock.sh` or
+  `scripts/env/`, so each one reaches you as a diff. Review changes under `.claude/` like any other
+  code.
+- **Inline code that hides both what it calls and the name it reaches** (a module name spelled in
+  pieces, run outside the guarded folders) is judged by its text and can pass. The sandbox and
+  review are the layers below it.
 - **A production server with write access** can run a SQL function of your own that writes while
   it reads like a query. The read-only server mode is the layer that stops it.
 
@@ -1114,11 +1130,11 @@ matching plugin's setup command produces, as plain files you can read before you
   missing or hanging python3), and each feedback hook stays silent when it cannot help.
   [The fail-mode table](.claude/hooks/README.md#fail-modes) lists every case.
 - **Every rule is proven both ways.** The table in
-  [`scripts/check/hook-probes.tsv`](scripts/check/hook-probes.tsv) holds 598 rows that say what
-  `safety-check.sh` must block (402) and let through (196).
+  [`scripts/check/hook-probes.tsv`](scripts/check/hook-probes.tsv) holds 808 rows that say what
+  `safety-check.sh` must block (540) and let through (268).
   [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) runs that table and the probes for
   everything else: the other hooks, the config keys, the env helpers and the unlock, each hook's
-  fail modes, a linked git worktree and plugin mode. That is 1,772 probes, all passing under macOS
+  fail modes, a linked git worktree and plugin mode. That is 2,256 probes, all passing under macOS
   `/bin/bash` 3.2. The commit gate runs them whenever a hook, `settings.json` or the probes change.
 - **Layers, not one wall.** The hooks read command text. The `deny` rules in
   `.claude/settings.json` and the OS-enforced Bash sandbox back them up, and `.dockerignore` plus
@@ -1136,9 +1152,9 @@ matching plugin's setup command produces, as plain files you can read before you
 | Context loaded in every session | 11,705 bytes: `CLAUDE.md` (7,427) and `working-agreements.md` (4,278); `ai-config.sh` fails above 15,000 |
 | Context loaded on demand | 11 path-scoped rules (37,469 bytes in all), each only while a matching file is in play |
 | Command and subagent descriptions Claude Code lists | 3,309 bytes for 15 commands and one subagent |
-| `safety-check.sh` on one command | about 110 ms (median): `git status`, a refused force-push and a piped test run all land within 108–110 ms |
+| `safety-check.sh` on one command | about 130 ms (median): `git status`, a refused force-push and a piped test run landed within 108–110 ms before the guard-script rules, which add about 17% (old and new run side by side) |
 | The other hooks | `db-guard.sh`, `mcp-guard.sh`, `migration-guard.sh`, `post-edit.sh` with ruff: about 75–105 ms; `post-commit.sh` after a commit: about 145 ms; `prompt-intent.sh`, `session-start.sh`: about 45–70 ms |
-| The hook probes at a commit that touches a hook | 1,772 probes in about four and a half minutes (256 s in a full gate run); the CI job allows 20 |
+| The hook probes at a commit that touches a hook | 2,256 probes in about eight minutes (476 s on their own); the CI job allows 20 |
 | CI | pull requests only; nothing on push, nothing on a schedule, no update bot |
 
 Measured on an Apple M5 with macOS `/bin/bash` 3.2 and python3 3.14, median of 25 runs per hook,
@@ -1295,7 +1311,7 @@ narrow it in `.claude/agent-config.json` ([Configuration](#configuration)). Neve
 <details>
 <summary>Does it work with macOS's old bash 3.2?</summary>
 
-Yes. Every hook and script is written for bash 3.2, and the probe harness passes all 1,772 probes
+Yes. Every hook and script is written for bash 3.2, and the probe harness passes all 2,256 probes
 under macOS `/bin/bash` 3.2.57. macOS has no `timeout` command; the hooks stop slow work
 themselves. Run `/bin/bash scripts/check/hook-probes.sh` to prove it on your machine.
 

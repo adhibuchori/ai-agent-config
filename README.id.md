@@ -444,7 +444,7 @@ keluaran asli.
    ```
 
 7. **Buktikan hook-nya di mesin Anda.** Hasil akhirnya `hook probes: <n> passed, 0 failed`; di
-   template ini sekarang jumlahnya 1.772 probe. [Lihat cara kerjanya](#lihat-cara-kerjanya)
+   template ini sekarang jumlahnya 2.256 probe. [Lihat cara kerjanya](#lihat-cara-kerjanya)
    menunjukkan cara memberi satu hook satu perintah secara manual.
 
    ```bash
@@ -762,7 +762,7 @@ membutuhkan runner.
 | [`scripts/check/gates.sh`](scripts/check/gates.sh) | Menjalankan setiap gate di `gates.list`, satu log per gate, tabel di akhir, dan ekor setiap kegagalan | `bash scripts/check/gates.sh` (`--only TEXT`, `--paths P…`, `--fail-fast`) | Satu perintah menjawab "sudah siap belum?" |
 | [`scripts/check/ai-config.sh`](scripts/check/ai-config.sh) | Setiap nomor aturan yang dikutip ada di `AGENTS.md`; konteks yang selalu dimuat maksimal 15.000 byte; setiap hook yang disambungkan ada, berjalan lewat `$CLAUDE_PROJECT_DIR`, dan tidak membaca variabel `CLAUDE_TOOL_INPUT_*` (variabel itu tidak ada); setiap server MCP `npx`/`uvx` di-pin ke satu rilis | `bash scripts/check/ai-config.sh` | `CLAUDE.md` tetap cukup pendek untuk dibaca; tidak ada kutipan aturan yang basi |
 | [`scripts/check/ai-config-probes.sh`](scripts/check/ai-config-probes.sh) | Membuktikan aturan pin MCP dari dua arah, di repo sementara | `bash scripts/check/ai-config-probes.sh` | Pemeriksaan pin tidak bisa diam-diam berhenti mendeteksi |
-| [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) + [`.tsv`](scripts/check/hook-probes.tsv) | Memberi setiap hook JSON yang dikirim Claude Code lalu memeriksa exit code dan pesannya: 598 baris tabel untuk `safety-check.sh` (402 harus diblokir, 196 harus lolos), lalu hook lain, mode gagalnya, git worktree, dan mode plugin | `bash scripts/check/hook-probes.sh` | Hook yang diam-diam berhenti memblokir menggagalkan gate |
+| [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) + [`.tsv`](scripts/check/hook-probes.tsv) | Memberi setiap hook JSON yang dikirim Claude Code lalu memeriksa exit code dan pesannya: 808 baris tabel untuk `safety-check.sh` (540 harus diblokir, 268 harus lolos), lalu hook lain, mode gagalnya, git worktree, dan mode plugin | `bash scripts/check/hook-probes.sh` | Hook yang diam-diam berhenti memblokir menggagalkan gate |
 | [`scripts/check/skills.sh`](scripts/check/skills.sh) | Memindai perintah, subagen, hook, dan skill apa pun dengan SkillSpector yang di-pin ke satu commit; `.skillspector-baseline.yaml` adalah catatan triasenya | `bash scripts/check/skills.sh` (mencetak cara instal yang di-pin jika belum terpasang) | Baris prompt injection di sebuah perintah tertangkap seperti dependensi yang buruk |
 | [`scripts/check/folder-shape.mjs`](scripts/check/folder-shape.mjs) | Melaporkan pelanggaran SHAPE-1 sampai SHAPE-4 | `node scripts/check/folder-shape.mjs` | Struktur tetap bisa ditebak seiring repo tumbuh |
 | [`scripts/check/coverage-policy.mjs`](scripts/check/coverage-policy.mjs) | Gagal jika gate cakupan itu sendiri dilemahkan: ambang di bawah 100, folder logika keluar dari cakupan, pengecualian tanpa alasan | `node scripts/check/coverage-policy.mjs` | 100% tidak bisa diam-diam menjadi 80% |
@@ -902,6 +902,14 @@ dibacanya ([batasan yang diketahui](#batasan-yang-diketahui) mendaftar jalur yan
   langsung, lewat shell, `source`, salinan atau link, glob, wrapper, package runner, alias git,
   atau `find -exec`; menulis, menautkan, atau menghapus apa pun di `.claude/state/unlock/`; mengubah
   helper di `scripts/env/`.
+- **Guard itu sendiri.** Setiap perubahan lewat shell pada hook di `.claude/hooks/`, probe yang
+  membuktikannya (`scripts/check/hook-probes.*`), `scripts/ops/unlock.sh`, helper di `scripts/env/`,
+  atau file yang menyalakan guard (`.claude/settings.json`, `settings.local.json`,
+  `agent-config.json`): menghapus, memindahkan, menautkan, menimpa, mengosongkan, `chmod`, mengedit
+  langsung (`sed -i`, `perl -i`, `w` pada `sed`, `print >` pada `awk`, kode inline), atau
+  meng-checkout di atasnya, dan hal yang sama pada folder yang memuatnya. Membaca, menjalankan, dan
+  menyalinnya keluar tetap terbuka; perubahan lewat Edit tool, yang bertanya dulu kepada Anda, atau
+  lewat `!` Anda sendiri.
 - **Pengaturan git yang mengubah apa yang dijalankan atau dimuat git**, apa pun nilainya: alias,
   include, key yang membawa perintah (`core.sshCommand`, `core.fsmonitor`, pager atau editor yang
   bukan penampil biasa, credential helper), `protocol.*.allow`, proxy, `url.*.insteadOf`,
@@ -918,6 +926,7 @@ dibacanya ([batasan yang diketahui](#batasan-yang-diketahui) mendaftar jalur yan
 | `--no-verify`, `HUSKY=0`, `core.hooksPath` yang diarahkan ulang | `safety-check.sh` | perbaiki temuan gate | tidak ada |
 | Pembacaan atau penulisan file `.env*` asli lewat shell | `safety-check.sh`, sandbox, aturan deny | `scripts/env/show.sh`; `set.sh` setelah Anda membuka kunci `env` | tidak ada; sandbox bisa dimatikan |
 | Claude menjalankan unlock | `safety-check.sh` | Anda menjalankan `! ./scripts/ops/unlock.sh env` | tidak ada |
+| Perubahan lewat shell pada hook, probe, `unlock.sh`, `scripts/env/`, atau pengaturan yang menyalakan guard | `safety-check.sh`, sandbox | Edit tool, yang bertanya dulu kepada Anda; atau jalankan sendiri dengan `!` | tidak ada |
 | Penulisan SQL ke produksi | `db-guard.sh` | Anda menjalankan `! ./scripts/ops/unlock.sh db`, atau menjalankan pernyataannya sendiri | `dbWriteGuard`, atau biarkan server tetap baca-saja |
 | Pengeditan manual revisi Alembic | `migration-guard.sh` | buat revisi baru | `"migrationsDirs": []` |
 | `alembic downgrade` | `safety-check.sh` | migrasi maju yang baru | tidak ada: jalankan sendiri dengan `!` |
@@ -943,9 +952,11 @@ sendiri, di luar hook dan (di sesi biasa) di luar sandbox:
 | Substitusi sebagai perintah atau file | `$( )` atau backtick sebagai nama perintah, atau sebagai file yang dibuka pembaca atau penulis |
 | Path yang dibangun saat berjalan | pemisahan `IFS`, `shopt -s dotglob`, array bash, substitusi `printf` |
 | Perintah runner yang dibangun saat berjalan | `npx "$(…)"`, `bun exec "$CMD"` dengan variabel yang tidak diketahui, `make -f /dev/stdin`, resep `just` atau `task` dari stdin |
-| Kode inline yang menyentuh file | kode `python -c` atau `node -e` yang membuka, mendaftar, atau membangun path |
+| Kode inline yang menyentuh file | kode `python -c` atau `node -e` yang membuka, mendaftar, membangun, mengubah, atau menghapus path, atau menjalankan perintah |
+| Program yang menyebut file-nya di dalam kodenya | `w`, `r`, atau `e` pada `sed`, `print >`, `getline <`, atau `system()` pada `awk` yang file atau perintahnya baru diketahui saat berjalan, atau yang tidak bisa dibaca |
 | Salinan ke tempat yang dilindungi | salinan, pemindahan, link, atau arsip yang berakhir di `.claude/state/` atau file `.env*` |
 | `xargs` yang mengumpan pembaca file | `ls \| xargs cat` |
+| Path yang diserahkan ke perintah yang mengubah file | `find . -name '*.sh' \| xargs chmod 000`, `f=$(find …); rm "$f"`, `find -exec` yang menjalankan pengubah di pohon yang dijaga |
 
 Menolak terlalu banyak memang disengaja, jadi beberapa perintah biasa juga berhenti di sini
 (`head $(ls -t …)`, `git ls-files | xargs cat`); jalankan perintah seperti itu dengan `!`.
@@ -954,8 +965,9 @@ Menolak terlalu banyak memang disengaja, jadi beberapa perintah biasa juga berhe
 
 **Tanpa python3** hanya beberapa aturan teks biasa yang menggantikan: push ke branch yang
 dilindungi, penghapusan rekursif, hard reset atau clean yang dipaksa, gate yang dilewati, nama
-`.env*`, unlock, dan `scripts/env/`. Claude diberi tahu soal ini, dan semua hal lain berjalan tanpa
-diperiksa di mesin itu, jadi pasanglah python3.
+`.env*`, unlock, `scripts/env/`, file yang menyalakan guard, dan skrip guard itu sendiri. Claude
+diberi tahu soal ini, dan semua hal lain berjalan tanpa diperiksa di mesin itu, jadi pasanglah
+python3.
 
 ### Lapisan sandbox
 
@@ -967,7 +979,8 @@ beserta proses turunannya, di tempat yang tidak terjangkau pemeriksaan teks:
 - `sandbox.filesystem.denyRead` mencakup setiap bentuk `.env*` di kedalaman mana pun (termasuk
   `.envrc`) dan cadangan `.env`; `allowRead` membuka kembali template `*.example`.
 - `sandbox.filesystem.denyWrite` mencakup `.claude/state/unlock/`, sehingga tidak ada perintah yang
-  di-sandbox yang bisa memalsukan unlock.
+  di-sandbox yang bisa memalsukan unlock, serta `.claude/hooks/` dan `scripts/ops/unlock.sh`,
+  sehingga tidak ada yang bisa menulis ulang guard.
 - `sandbox.excludedCommands` hanya mengizinkan `scripts/env/show.sh` dan `scripts/env/set.sh`
   berjalan di luarnya, karena keduanya harus menjangkau file `.env`.
 
@@ -999,8 +1012,13 @@ Batasannya, dan cara mematikannya:
   `flock`, `parallel`, atau `dotenvx` sampai Anda mendaftarkannya) hanya dinilai dari namanya. Di
   tempat sandbox berjalan, sandbox tetap menjaga file `.env*` dan file unlock darinya.
 - **Tanpa python3** hanya aturan teks biasa di atas yang berjalan.
-- **Hook adalah file di dalam repo.** Mengubahnya berarti mengubah apa yang ditolaknya, jadi
-  review perubahan di bawah `.claude/` seperti kode lainnya.
+- **Edit tool bisa mengubah hook.** Shell tidak bisa, tetapi mengedit file adalah cara kode
+  berubah: `.claude/settings.json` bertanya dulu kepada Anda sebelum setiap edit pada hook, probe,
+  `unlock.sh`, atau `scripts/env/`, sehingga setiap perubahan sampai kepada Anda sebagai diff.
+  Review perubahan di bawah `.claude/` seperti kode lainnya.
+- **Kode inline yang menyembunyikan apa yang dipanggilnya sekaligus nama yang dijangkaunya**
+  (nama modul yang dieja sepotong-sepotong, dijalankan di luar folder yang dijaga) dinilai dari
+  teksnya dan bisa lolos. Sandbox dan review adalah lapisan di bawahnya.
 - **Server produksi dengan akses tulis** bisa menjalankan fungsi SQL milik Anda sendiri yang
   menulis padahal terlihat seperti query baca. Mode server baca-saja adalah lapisan yang
   menghentikannya.
@@ -1162,11 +1180,11 @@ Anda baca sebelum mengadopsi apa pun.
   balik diam saja saat tidak bisa membantu. [Tabel mode gagal](.claude/hooks/README.md#fail-modes)
   mendaftar setiap kasusnya.
 - **Setiap aturan dibuktikan dari dua arah.** Tabel di
-  [`scripts/check/hook-probes.tsv`](scripts/check/hook-probes.tsv) berisi 598 baris yang menyatakan
-  apa yang harus diblokir (402) dan diloloskan (196) oleh `safety-check.sh`.
+  [`scripts/check/hook-probes.tsv`](scripts/check/hook-probes.tsv) berisi 808 baris yang menyatakan
+  apa yang harus diblokir (540) dan diloloskan (268) oleh `safety-check.sh`.
   [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) menjalankan tabel itu dan probe
   untuk semua hal lain: hook lainnya, key konfigurasi, helper env dan unlock, mode gagal setiap
-  hook, git worktree yang tertaut, dan mode plugin. Totalnya 1.772 probe, semuanya lolos di
+  hook, git worktree yang tertaut, dan mode plugin. Totalnya 2.256 probe, semuanya lolos di
   `/bin/bash` 3.2 macOS. Gate commit menjalankannya setiap kali hook, `settings.json`, atau
   probe-nya berubah.
 - **Berlapis, bukan satu tembok.** Hook membaca teks perintah. Aturan `deny` di
@@ -1186,9 +1204,9 @@ Anda baca sebelum mengadopsi apa pun.
 | Konteks yang dimuat di setiap sesi | 11.705 byte: `CLAUDE.md` (7.427) dan `working-agreements.md` (4.278); `ai-config.sh` gagal di atas 15.000 |
 | Konteks yang dimuat sesuai kebutuhan | 11 aturan per path (total 37.469 byte), masing-masing hanya saat file yang cocok sedang dikerjakan |
 | Deskripsi perintah dan subagen yang didaftar Claude Code | 3.309 byte untuk 15 perintah dan satu subagen |
-| `safety-check.sh` untuk satu perintah | sekitar 110 md (median): `git status`, force-push yang ditolak, dan test run yang di-pipe semuanya di kisaran 108–110 md |
+| `safety-check.sh` untuk satu perintah | sekitar 130 md (median): `git status`, force-push yang ditolak, dan test run yang di-pipe berada di kisaran 108–110 md sebelum aturan skrip guard, yang menambah sekitar 17% (versi lama dan baru dijalankan berdampingan) |
 | Hook lainnya | `db-guard.sh`, `mcp-guard.sh`, `migration-guard.sh`, `post-edit.sh` dengan ruff: sekitar 75–105 md; `post-commit.sh` setelah commit: sekitar 145 md; `prompt-intent.sh`, `session-start.sh`: sekitar 45–70 md |
-| Probe hook pada commit yang menyentuh sebuah hook | 1.772 probe dalam sekitar empat setengah menit (256 detik dalam satu run gate penuh); job CI memberi batas 20 menit |
+| Probe hook pada commit yang menyentuh sebuah hook | 2.256 probe dalam sekitar delapan menit (476 detik jika dijalankan sendiri); job CI memberi batas 20 menit |
 | CI | hanya pull request; tidak ada saat push, tidak ada yang terjadwal, tidak ada bot pembaruan |
 
 Diukur di Apple M5 dengan `/bin/bash` 3.2 macOS dan python3 3.14, median dari 25 kali jalan per
@@ -1352,7 +1370,7 @@ Jangan pernah melonggarkan `settings.json` hanya untuk melewati satu penolakan.
 <details>
 <summary>Apakah bisa jalan di bash 3.2 bawaan macOS yang sudah tua?</summary>
 
-Bisa. Setiap hook dan skrip ditulis untuk bash 3.2, dan harness probe meloloskan ke-1.772 probe di
+Bisa. Setiap hook dan skrip ditulis untuk bash 3.2, dan harness probe meloloskan ke-2.256 probe di
 `/bin/bash` 3.2.57 macOS. macOS tidak punya perintah `timeout`; hook menghentikan pekerjaan yang
 lambat dengan sendirinya. Jalankan `/bin/bash scripts/check/hook-probes.sh` untuk membuktikannya di
 mesin Anda.
