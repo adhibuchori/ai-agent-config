@@ -34,6 +34,18 @@ condenses a diff, and a line it drops is a finding nobody sees.
 - A vendor call with no timeout or no bounded retry
 - A non-success completion status treated as usable output (AGENTS.md §D Rule 15)
 
+Run the cheap scans first and report what they print (with RTK installed, as `rtk proxy …`):
+
+```bash
+bash scripts/check/secrets.sh                      # gitleaks over the staged changes
+git diff --cached --name-only | grep -E '(^|/)\.env(\.|$)' | grep -v '\.example$'   # a real env file staged
+git diff --cached | grep -niE "(api[_-]?key|secret|password|token|private[_-]?key)[\"']?[[:space:]]*[:=][[:space:]]*[\"'][^\"']{8,}"
+```
+
+Where the repo adopted the payload contract (`payload.config.json`, AGENTS.md §P), also: a new
+route with no policy, an exemption with no reason, or the payload middleware added after another
+middleware that reads the body.
+
 ## Step 3: Correctness
 
 - A service calling a vendor SDK directly instead of through its `Protocol` (AGENTS.md §D Rule 12)
@@ -53,6 +65,10 @@ condenses a diff, and a line it drops is a finding nobody sees.
 
 ## Step 5: Report
 
-Group findings as CRITICAL / HIGH / MEDIUM / LOW. CRITICAL blocks the merge; HIGH should be
-fixed before it. State clearly whether the change is approved, approved with warnings, or
-blocked.
+Group findings as CRITICAL / HIGH / MEDIUM / LOW, each with file, line, the rule it breaks and the
+fix. CRITICAL blocks the merge; HIGH should be fixed before it. State clearly whether the change is
+approved, approved with warnings, or blocked. Name any step you could not run, and list the gates
+you ran with their result.
+
+Then offer the fixes: apply all, go one by one, or leave them. Apply nothing before the user
+chooses (`/ship` applies them down to MEDIUM without asking).

@@ -19,7 +19,8 @@ With RTK installed, run the `git log` and `git diff` lines as `rtk proxy git …
 merge commits from `--oneline` and reshapes `--stat`, and the PR body lists both.
 
 The base branch is **`dev`**, never `main` — this repo promotes `internal/{scope}` → `dev` →
-`prod`. A pull request into `prod` is `/promote`'s job.
+`prod`. A pull request into `prod` is `/promote`'s job. Stop when the current branch is `dev`,
+`prod` or the default branch: a pull request starts from a work branch.
 
 ## Step 1: Gate First
 
@@ -28,7 +29,8 @@ fails it again, a runner's minutes later.
 
 ## Step 2: Collect What Is Missing
 
-Ticket ID (optional), a one-sentence description, and any model, provider or env change.
+Ticket ID (optional), a one-sentence description, any model, provider or env change, and whether a
+companion docs repo needs its own pull request. Ask for everything missing in one question.
 
 ## Step 3: Draft
 
@@ -41,7 +43,8 @@ apply. Do not add the gate's checks back in: the Quality Gate is the list.
 
 ## Step 4: Confirm
 
-Show title and body. Ask whether they are correct before creating.
+Show title and body in a fenced block. Ask whether they are correct before creating; on "no", ask
+what to change, redraft, and show it again.
 
 ## Step 5: Create
 

@@ -29,8 +29,11 @@ not own.
 - Provider protocols touched:
 - Env vars added or changed (and their `.env.<target>.example` lines):
 
+## UNKNOWNS
+- What the code did not answer, each with how to find out ("No unknowns" when there are none)
+
 ## TASKS
-- [ ] [module] [verb] [file] — what and why, with the test that mirrors it
+- [ ] [module] [verb] [file] — what and why, with the test that mirrors it — ~N min
 
 ## CONTRACTS
 - Schema or model changes, and who owns them
@@ -38,11 +41,14 @@ not own.
 - Values another place must spell the same way, and their one home
 
 ## RISKS
-- Only risks that could actually block or break something
+- [HIGH/MED/LOW] risk → mitigation; only risks that could actually block or break something
 
 ## CONFIRMATION
-- Questions that need an answer before starting
+- One to three questions that need an answer before starting, or "No blockers — ready to execute"
 ```
+
+Tasks are 5 to 30 minutes each (split a larger one), ordered by what depends on what. More than 50
+tasks means phases: show phase 1 and ask before planning the rest.
 
 Scopes in this repo: `<module>`, `providers`, `routes`, `config` — replace with your own.
 
