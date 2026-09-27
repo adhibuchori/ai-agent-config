@@ -426,7 +426,7 @@ Every command below was run on a fresh folder; the outputs quoted are real.
    ```
 
 7. **Prove the hooks on your machine.** It ends with `hook probes: <n> passed, 0 failed`; on this
-   template today that is 2,330 probes. [See it in action](#see-it-in-action) shows how to feed one
+   template today that is 2,333 probes. [See it in action](#see-it-in-action) shows how to feed one
    hook a single command by hand.
 
    ```bash
@@ -1149,7 +1149,7 @@ matching plugin's setup command produces, as plain files you can read before you
   `safety-check.sh` must block (569) and let through (276).
   [`scripts/check/hook-probes.sh`](scripts/check/hook-probes.sh) runs that table and the probes for
   everything else: the other hooks, the config keys, the env helpers and the unlock, each hook's
-  fail modes, a linked git worktree and plugin mode. That is 2,330 probes, all passing under macOS
+  fail modes, a linked git worktree and plugin mode. That is 2,333 probes, all passing under macOS
   `/bin/bash` 3.2. The commit gate runs them whenever a hook, `settings.json` or the probes change.
 - **Layers, not one wall.** The hooks read command text. The `deny` rules in
   `.claude/settings.json` and the OS-enforced Bash sandbox back them up, and `.dockerignore` plus
@@ -1169,7 +1169,7 @@ matching plugin's setup command produces, as plain files you can read before you
 | Command and subagent descriptions Claude Code lists | 3,309 bytes for 15 commands and one subagent |
 | `safety-check.sh` on one command | about 130 ms (median): `git status`, a refused force-push and a piped test run landed within 108–110 ms before the guard-script rules, which add about 17% (old and new run side by side) |
 | The other hooks | `db-guard.sh`, `mcp-guard.sh`, `migration-guard.sh`, `post-edit.sh` with ruff: about 75–105 ms; `post-commit.sh` after a commit: about 145 ms; `prompt-intent.sh`, `session-start.sh`: about 45–70 ms |
-| The hook probes at a commit that touches a hook | 2,330 probes in about nine and a half minutes (567 s on their own); the CI job allows 20 |
+| The hook probes at a commit that touches a hook | 2,333 probes in about nine and a half minutes (567 s on their own); the CI job allows 20 |
 | CI | pull requests only; nothing on push, nothing on a schedule, no update bot |
 
 Measured on an Apple M5 with macOS `/bin/bash` 3.2 and python3 3.14, median of 25 runs per hook,
@@ -1326,7 +1326,7 @@ narrow it in `.claude/agent-config.json` ([Configuration](#configuration)). Neve
 <details>
 <summary>Does it work with macOS's old bash 3.2?</summary>
 
-Yes. Every hook and script is written for bash 3.2, and the probe harness passes all 2,330 probes
+Yes. Every hook and script is written for bash 3.2, and the probe harness passes all 2,333 probes
 under macOS `/bin/bash` 3.2.57. macOS has no `timeout` command; the hooks stop slow work
 themselves. Run `/bin/bash scripts/check/hook-probes.sh` to prove it on your machine.
 
