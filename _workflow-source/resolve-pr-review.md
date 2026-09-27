@@ -15,7 +15,9 @@ gh api "repos/{OWNER}/{REPO}/pulls/{PR}/comments" --paginate
 gh api "repos/{OWNER}/{REPO}/pulls/{PR}/reviews" --paginate
 ```
 
-If a reviewer was named, filter to that user. If there are no comments, say so and stop.
+With RTK installed, run the two `gh api` calls as `rtk proxy gh api …`: its rewrite can shorten the
+JSON, and every comment's `id` and body is needed. If a reviewer was named, filter to that user. If
+there are no comments, say so and stop.
 
 ## Step 2: Judge Each Against Project Rules
 

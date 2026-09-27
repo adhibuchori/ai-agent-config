@@ -9,7 +9,8 @@ description: Runs the quality gates, inspects the staged change, and drafts a co
 
 1. **Quality gate**: run `/check-fix` first. Do not proceed from a broken state.
 
-2. **Inspect**: `git status --short` and `git diff --staged`, read unfiltered.
+2. **Inspect**: `git status --short` and `git diff --staged`, read whole (with RTK installed,
+   `rtk proxy git status --short` and `rtk proxy git diff --staged`: its rewrite condenses both).
    - **Never stage**: an env file other than the `.env.<target>.example` templates, `.coverage`,
      anything under `.venv/`.
    - `.claude/settings.json` is tracked, and a change to it is its own commit, together with the

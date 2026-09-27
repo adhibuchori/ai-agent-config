@@ -20,8 +20,8 @@ git diff dev...HEAD --stat
 git diff dev...HEAD
 ```
 
-Read the diff unfiltered. If a command-output wrapper summarises or truncates, bypass it: a line it
-drops is a finding nobody sees.
+Read the diff whole. With RTK installed, run each `git diff` as `rtk proxy git diff …`: its rewrite
+condenses a diff, and a line it drops is a finding nobody sees.
 
 ## Step 2: Security First — Block On These
 
