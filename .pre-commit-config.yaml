@@ -1,0 +1,103 @@
+# The commit gate. Install it once per clone:
+#
+#   uv run pre-commit install
+#
+# Every hook is `repo: local`, so nothing is downloaded: each one runs a tool this repo already
+# pins (uv.lock) or a script it ships. scripts/check/gates.list is the same set for a run by hand
+# (`bash scripts/check/gates.sh`), and .github/scripts/quality-gate.sh runs it again in CI.
+# folder-shape and coverage-policy are plain Node scripts (Node 20 or newer); the secret scan needs
+# gitleaks on PATH. `env -u PYTHONPATH` keeps an exported PYTHONPATH from shadowing the project's
+# own packages (.claude/anti-patterns/pythonpath-breaks-mypy-plugin.md).
+repos:
+  - repo: local
+    hooks:
+      # ── Stack tooling ───────────────────────────────────────────────────────────────────────
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy
+        entry: env -u PYTHONPATH uv run mypy .
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: lint-imports
+        name: import boundaries (AGENTS.md §B)
+        entry: uv run lint-imports
+        language: system
+        pass_filenames: false
+        files: (\.py|^pyproject\.toml)$
+      - id: vulture
+        name: vulture (dead code)
+        entry: uv run vulture
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: deptry
+        name: deptry (dependencies)
+        entry: uv run deptry src
+        language: system
+        pass_filenames: false
+        files: ^(src/.*\.py|pyproject\.toml|uv\.lock)$
+      - id: gitleaks
+        name: gitleaks (staged changes)
+        entry: gitleaks git --pre-commit --staged --redact --no-banner --config .gitleaks.toml
+        language: system
+        pass_filenames: false
+
+      # ── Layer checks (scripts/) ─────────────────────────────────────────────────────────────
+      - id: folder-shape
+        name: folder shape (SHAPE)
+        entry: node scripts/check/folder-shape.mjs
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: coverage-policy
+        name: coverage policy (COVER)
+        entry: node scripts/check/coverage-policy.mjs
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: pytest-coverage
+        name: pytest with 100% branch coverage (COVER)
+        entry: env -u PYTHONPATH uv run pytest tests -q --cov
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: ai-config
+        name: AI config (rule citations, context budget, hook wiring, MCP pins)
+        entry: bash scripts/check/ai-config.sh
+        language: system
+        pass_filenames: false
+        files: ^(\.claude/|_workflow-source/|docs/|\.github/|\.mcp\.json$|[^/]+\.md$|scripts/check/ai-config\.sh$)
+      - id: ai-config-probes
+        name: AI config pin rule, proven both ways
+        entry: bash scripts/check/ai-config-probes.sh
+        language: system
+        pass_filenames: false
+        files: ^scripts/check/ai-config(-probes)?\.sh$
+      - id: hook-probes
+        name: Claude Code hook probes (what each hook must block and let through)
+        entry: bash scripts/check/hook-probes.sh
+        language: system
+        pass_filenames: false
+        files: ^(\.claude/hooks/|\.claude/settings\.json$|scripts/check/hook-probes|scripts/ops/unlock\.sh$|scripts/env/)
+      - id: workflows-mirror
+        name: workflow mirror (_workflow-source to .claude/commands and .agent/workflows)
+        entry: bash scripts/sync/workflows.sh --check
+        language: system
+        pass_filenames: false
+        files: ^(_workflow-source/|\.claude/commands/|\.agent/workflows/|scripts/sync/workflows\.sh$)
+      - id: check-skills
+        name: SkillSpector (skills, commands, subagents, hooks)
+        entry: bash scripts/check/skills.sh --staged
+        language: system
+        pass_filenames: false
+        files: ^(\.agents/skills/|\.claude/(skills|commands|agents|hooks)/|_workflow-source/|\.skillspector-baseline\.yaml$|scripts/check/skills\.sh$)

@@ -1,0 +1,26 @@
+# Gitleaks configuration.
+#
+# The default ruleset stays on; this file only narrows it where the generic rules
+# misfire on this codebase. Keep additions specific — a broad allowlist turns the
+# scanner into decoration.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Project-specific false positives"
+
+# No path is exempt. `.claude/` holds the filled-in DATABASE.md, OPERATIONS.md and MCP configs,
+# exactly where a pasted credential would land; an example in a doc is allowlisted by its text.
+
+# Match against the whole matched text, not just the extracted secret: what makes
+# these safe is the surrounding assignment, not the value on its own.
+regexTarget = "match"
+
+regexes = [
+  # Env var references rather than values: "${GITHUB_PERSONAL_ACCESS_TOKEN}".
+  '''['"]\$\{[A-Z_][A-Z0-9_]*\}['"]''',
+  # The fake JWT scripts/check/hook-probes.sh writes into a throwaway .env to prove
+  # show.sh masks it. Only this exact token; any other JWT is still reported.
+  '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJwcm9iZSJ9\.probeSignatureValue9''',
+]

@@ -1,0 +1,164 @@
+[project]
+name = "<repo-name>"
+version = "0.1.0"
+description = "<one-line description>"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.52.3",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.15.0",
+    "sqlalchemy[asyncio]>=2.0.51",
+    "asyncpg>=0.30.0",
+    "structlog>=24.4.0",
+    "scalar-fastapi>=1.0.3",
+    "httpx>=0.27.0",
+    # Add your provider SDKs here (LLM/embedding/whatever this service wraps).
+    # See .claude/rules/backend/providers.md before adding one.
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.3",
+    "mypy>=1.13.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "import-linter>=2.1",
+    "pre-commit>=4.6.2",
+    "pip-audit>=2.7.3",
+    "vulture==2.16",
+    "deptry==0.25.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# If `db/session.py#get_engine()` is process-lifetime `@lru_cache`d, like the
+# real app, a function-scoped loop per test would reuse its connection pool
+# across event loops and crash with "Event loop is closed". Both the fixture
+# loop and the test loop must share the same scope. Delete this comment (but
+# keep the setting) once you've confirmed your own session module does this.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+markers = [
+    "integration: requires live Postgres/Redis — gated by RUN_INTEGRATION_TESTS=1",
+]
+addopts = "-q"
+
+[tool.coverage.run]
+branch = true
+source = ["src/app"]
+omit = ["src/app/main.py"]
+
+[tool.coverage.report]
+# 100% of statements and branches (.claude/rules/python/coverage.md). The exclusions are a closed
+# list of lines that never execute: type-only imports, abstract bodies and Protocol stubs. A file
+# that is hard to test is never excluded: it gets a test or a fake.
+fail_under = 100
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "^\\s*\\.\\.\\.$"]
+
+[tool.importlinter]
+root_package = "app"
+include_external_packages = true
+
+# Rename the container list to your own modules. Keep all three contracts —
+# together they're what makes AGENTS.md §B a machine-checked boundary instead
+# of an advisory one. Add a new module to both the layers and the independence
+# contracts below, or its layering goes unchecked while CI stays green (AGENTS.md
+# §B, "Recipe — adding a new module").
+
+[[tool.importlinter.contracts]]
+name = "Per-module layering: routes -> handlers -> service -> (repository)"
+type = "layers"
+layers = [
+    "routes",
+    "handlers",
+    "service",
+    "(repository)",
+]
+containers = [
+    "app.modules.<example>",
+]
+
+[[tool.importlinter.contracts]]
+name = "Core and providers never depend on modules (dependencies flow one way)"
+type = "forbidden"
+source_modules = ["app.core", "app.providers"]
+forbidden_modules = ["app.modules"]
+
+[[tool.importlinter.contracts]]
+name = "Modules only talk to each other through their package __init__"
+type = "independence"
+modules = [
+    "app.modules.<example>",
+]
+
+[tool.vulture]
+# The whitelist names what code outside src/ reads; each entry says who.
+paths = ["src", "scripts/vulture/whitelist.py"]
+min_confidence = 60
+sort_by_size = true
+# Registered by a decorator and called by the framework: FastAPI app hooks and Pydantic validators.
+ignore_decorators = ["@app.*", "@field_validator", "@model_validator"]
+# Pydantic reads `model_config`; Starlette calls `dispatch` on every BaseHTTPMiddleware.
+ignore_names = ["model_config", "dispatch"]
+
+[tool.deptry]
+known_first_party = ["app"]
+
+[tool.deptry.per_rule_ignores]
+# uvicorn: the server the container runs. asyncpg: the SQLAlchemy driver that the
+# postgresql+asyncpg:// URL in DATABASE_URL names. Neither is imported.
+DEP002 = ["uvicorn", "asyncpg"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+# Excludes hold even for a file pre-commit names explicitly, so the format hook cannot rewrite one.
+force-exclude = true
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "I", "UP", "B", "SIM", "C4", "ASYNC", "RUF", "ANN401", "TID251",
+]
+ignore = ["E501"]
+
+# AGENTS.md Rule 26: no explicit Any. mypy's disallow_any_explicit would also flag the __init__ the
+# Pydantic plugin generates for every model, so the ban sits here, on the name itself.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "No explicit Any: use object, a TypedDict or a Pydantic model (.claude/rules/python/types.md)."
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.format]
+quote-style = "double"
+# scripts/env/envfile.py is the file the agent-core plugin installs, and its `sync --check` reports
+# local edits. ruff still lints it; a format fix belongs in agent-core, not in this copy.
+exclude = ["scripts/env/envfile.py"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+explicit_package_bases = true
+strict = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+# scripts/env/envfile.py, the agent-core file (see [tool.ruff.format]), is untyped: `mypy .` checks
+# every other file, tests and scripts included, and this one waits for a typed release.
+exclude = ['^scripts/env/envfile\.py$']
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false

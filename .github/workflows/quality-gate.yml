@@ -1,0 +1,59 @@
+name: Quality Gate
+
+on:
+  pull_request:
+    # dev is the review gate; prod re-runs it as a safety net on promotion.
+    # Diff steps compare against origin/<base branch>, so they follow it.
+    branches: [dev, prod]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Quality Gate
+    # The job a developer waits on takes the fast pool when one is set (.claude/CI-RUNNERS.md).
+    runs-on: ${{ vars.CI_RUNNER_FAST || vars.CI_RUNNER || 'ubuntu-latest' }}
+    # The hook probes alone take about three minutes; a hung step stops here, not at the cap.
+    timeout-minutes: 20
+
+    # No services: the unit tier never dials Postgres or Redis, and the integration step collects
+    # nothing until the first integration test lands. Add them with that test (SETUP.md § 6).
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: postgresql+asyncpg://<user>:<password>@localhost:5432/<database-name>
+      REDIS_URL: redis://localhost:6379
+      # A dummy for every credential core/settings/config.py validates: it only has to parse. A
+      # variable exported in your shell but missing here passes locally and fails only in CI.
+      <PROVIDER>_API_KEY: ci-placeholder
+      <SERVICE>_SERVICE_TOKEN: ci-only-placeholder-secret-padded-to-32-chars
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      # folder-shape.mjs and coverage-policy.mjs need Node 20+, which a third-party runner may lack.
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      # CI=true on the runner enables strict mode: a check that cannot run
+      # fails the gate instead of silently passing. See quality-gate.sh.
+      - name: Quality Gate
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: .github/scripts/quality-gate.sh "origin/${BASE_REF}"

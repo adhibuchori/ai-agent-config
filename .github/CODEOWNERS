@@ -1,0 +1,36 @@
+# Requests reviewers automatically. Without branch protection this is a prompt, not
+# a gate. Later rules win, so the narrow entries below override the catch-all.
+
+*                                @your-github-handle
+
+# Anything that decides what reaches production deserves a deliberate look.
+/.github/workflows/              @your-github-handle
+/.github/scripts/                @your-github-handle
+/.gitleaks.toml                  @your-github-handle
+/Dockerfile                      @your-github-handle
+/.dockerignore                   @your-github-handle
+
+# What the agent may do, and the gates that judge its work: a one-line edit here can switch a
+# guard or a check off for every session and every commit that follows.
+/.claude/hooks/                  @your-github-handle
+/.claude/settings.json           @your-github-handle
+/.claude/agent-config.json       @your-github-handle
+/.mcp.json                       @your-github-handle
+/.pre-commit-config.yaml         @your-github-handle
+/.skillspector-baseline.yaml     @your-github-handle
+/scripts/check/                  @your-github-handle
+/scripts/ops/                    @your-github-handle
+/scripts/env/                    @your-github-handle
+
+# The composition root, the env schema, and the one real connection pool: a
+# mistake in any of these breaks startup or serializes every request.
+/src/app/main.py                 @your-github-handle
+/src/app/core/settings/config.py @your-github-handle
+/src/app/db/session.py           @your-github-handle
+
+# If Rule 13 applies: the cross-repo schema mirror. A hand-edit here that
+# doesn't match the schema owner's copy breaks queries silently.
+/src/app/db/models.py            @your-github-handle
+
+# Alembic-generated, if this repo owns its schema — never hand-edited.
+/src/app/db/migrations/          @your-github-handle

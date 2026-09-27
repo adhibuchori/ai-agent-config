@@ -1,0 +1,14 @@
+// markdownlint settings for this repo's own docs. Run `markdownlint-cli2` from the root.
+{
+  "globs": ["README.md", "README.id.md", "SETUP.md", "docs/**/*.md"],
+  "config": {
+    // Prose wraps at 100 columns, like the code; tables and code blocks keep their natural width.
+    "MD013": { "line_length": 100, "code_blocks": false, "tables": false },
+    // The README opens with its language switch, just above the banner heading.
+    "MD041": { "allow_preamble": true },
+    // The README's banner, light and dark pictures, and collapsed sections are HTML on purpose.
+    "MD033": {
+      "allowed_elements": ["h1", "p", "a", "picture", "source", "img", "details", "summary"]
+    }
+  }
+}

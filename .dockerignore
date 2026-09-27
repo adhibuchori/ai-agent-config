@@ -1,0 +1,39 @@
+# The Docker build context. Anything listed here never reaches the builder, so a `COPY . .` cannot
+# bake it into an image layer.
+
+# Secrets: every env file at any depth, except the committed templates, which hold no values.
+.env*
+**/.env*
+!.env.example
+!.env.*.example
+!**/.env.example
+!**/.env.*.example
+
+# Version control, CI and local tooling state
+.git
+.github
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.import_linter_cache
+.coverage
+htmlcov
+.skillspector
+.DS_Store
+*.log
+
+# The AI configuration layer: agent state (unlock files, env backups), rules, commands, MCP servers
+.claude
+.agent
+.agents
+.serena
+_workflow-source
+.mcp.json
+.skillspector-baseline.yaml
+AGENTS.md
+CLAUDE.md
+SSOT.md
+promote-deploy-logs
