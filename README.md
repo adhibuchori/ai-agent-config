@@ -41,12 +41,14 @@ every commit and on every pull request.
 > `uv run pre-commit install`. From then on, Claude cannot push to a protected branch, read a
 > `.env` file or write to the production database without you. Every commit runs the 15 checks
 > of one gate list, and CI runs them again. `/plan`, `/review`, `/commit`, `/create-pr` and
-> `/merge-pr` walk each change from idea to merge. The hooks run on your machine and open no
-> network connection. Prefer a plugin to copied files? See [Prefer plugins?](#prefer-plugins).
+> `/merge-pr` walk each change from idea to merge. An optional module seals every request and
+> response body between services. The hooks run on your machine and open no network connection.
+> Prefer a plugin to copied files? See [Prefer plugins?](#prefer-plugins).
 
 ## Contents
 
 - [Why this exists](#why-this-exists)
+- [Payload encryption](#payload-encryption-sealed-bodies-and-one-endpoint-registry)
 - [See it in action](#see-it-in-action)
 - [Who it is for, and who it is not for](#who-it-is-for-and-who-it-is-not-for)
 - [Which template, or which plugin?](#which-template-or-which-plugin)
@@ -194,6 +196,93 @@ with `…`. The lines around them show where they appear in a session.
 
 </details>
 
+## Payload encryption: sealed bodies and one endpoint registry
+
+The flagship module, and optional. Once you adopt it, every request and response body that crosses
+a service boundary travels sealed, every route sits in one registry with its encryption policy
+beside its path, and the gate keeps both true before anything merges. This Python copy speaks the
+same wire format as the frontend and backend templates, proven against one shared set of test
+vectors. [`.claude/PAYLOAD-CONTRACT.md`](.claude/PAYLOAD-CONTRACT.md) is the full contract: the
+threat model, the wire format, the policies, rules P1 to P10, the keys and the wiring.
+
+**How it works.** A sealed body is an AES-256-GCM envelope of six fields (`v`, `alg`, `kid`, `iv`,
+`ct`, `ts`), sent as `application/vnd.payload-envelope+json`. Its authenticated data is never sent:
+it names the method (or the response status), the registry's route pattern, the key id and the time
+it was sealed, so the envelope opens on no other route, and one more than 120 seconds from the
+receiver's clock is refused before the cipher runs. The service and each caller share one AES-256
+key per hop (`kid:base64` in one variable; rotation adds `<NAME>_NEXT`), and the service answers
+under the key the request named, so several callers can hold different keys. `PayloadMiddleware`, a
+plain ASGI middleware, opens a request before any route or validator runs and seals the response,
+so handlers and services see plain objects. FastAPI builds its spec at runtime, so the registry is
+one dict in your code, and a test that walks `app.routes` fails on a route it does not name. A
+route leaves `strict` only through an exemption in `payload.config.json` that gives its reason. A
+refusal leaves as plaintext problem+json with an `ENVELOPE_*` code, and status codes stay in the
+clear.
+
+1. **A caller sends plaintext to a sealed route.**
+   *The problem:* a script or an old client posts plain JSON, and its answer travels in the clear
+   while every other request is sealed; nobody notices, because it works.
+   *The fix:* the middleware refuses a plaintext body on a sealed route with `ENVELOPE_REQUIRED`
+   before any route runs, and the refusal carries the code, never a payload.
+   *Handled by:* [`middleware.py`](src/app/core/payload/middleware.py),
+   [`policy.py`](src/app/core/payload/policy.py).
+2. **Two copies of the cipher drift apart.**
+   *The problem:* the backend's copy changes how it builds the authenticated data; both repos'
+   tests stay green, and every call between them fails with an error that says nothing.
+   *The fix:* this copy opens the same committed ciphertexts and refuses the same replays as every
+   other one, in `test_vectors.py`, at every commit.
+   *Handled by:* [`payload-vectors.json`](scripts/check/payload-vectors.json),
+   [`test_vectors.py`](tests/unit/core/payload/test_vectors.py).
+3. **A debugging switch ships to production.**
+   *The problem:* someone turns encryption off to chase a bug, and the branch merges that way.
+   *The fix:* `resolve_encryption_mode` refuses `off` in production at startup, so a service merged
+   with the switch flipped fails to boot instead of serving plaintext; debugging uses
+   `PAYLOAD_MODE=off` in your own shell, and the committed `payload.config.json` says `strict`.
+   *Handled by:* [`mode.py`](src/app/core/payload/mode.py),
+   [`payload.config.json`](payload.config.json).
+4. **A captured request is replayed on another route.**
+   *The problem:* an envelope lifted from a log is sent to a more dangerous endpoint.
+   *The fix:* the authenticated data names the method, the route pattern, the key id and the time,
+   so it opens nowhere else, and anything older than two minutes is refused before the cipher runs.
+   *Handled by:* [`envelope.py`](src/app/core/payload/envelope.py),
+   [`codec.py`](src/app/core/payload/codec.py).
+
+| Piece | What it does | How to use | Why it helps |
+| :--- | :--- | :--- | :--- |
+| [`src/app/core/payload/`](src/app/core/payload/) | The cipher (AES-256-GCM through `cryptography`), pre-shared key rings with rotation, the strict/off switch, the route matcher, and the ASGI middleware; tests at 100% branch coverage under `tests/unit/core/payload/` | `app.add_middleware(PayloadMiddleware, mode=…, registry=ROUTES, key_ring=…)`, added first so it runs innermost | A reviewed reference instead of hand-rolled crypto |
+| The route registry | One dict of `Endpoint` entries, each with its policy and, when not `strict`, its reason | Name every route in it; a test walks `app.routes` and fails on one it lacks (`AGENTS.md` Rule 29) | Every route has a decided policy |
+| [`payload.config.json`](payload.config.json) | The committed switch, the exemptions with their reasons, the peers | Keep `"encryption": "strict"`; add `"METHOD /pattern": { "encryption", "reason" }` under `exemptions` | An exception to encryption is one reviewed line with its reason |
+| [`payload-vectors.json`](scripts/check/payload-vectors.json) | The shared known answers: the authenticated data, the ciphertexts to open, the replays to refuse | Read by `test_vectors.py`; never regenerated to make a failing copy pass | This copy and the TypeScript ones cannot drift apart unseen |
+
+**Adopt it.** The Quick start already copied the contract, its rule and the vectors. Copy the
+module from your project's root, with `CFG` set as in the [Quick start](#quick-start), and add its
+one dependency:
+
+```bash
+cp "$CFG"/payload.config.json .
+mkdir -p src/app/core tests/unit/core
+cp -R "$CFG"/src/app/core/payload src/app/core/
+cp -R "$CFG"/tests/unit/core/payload tests/unit/core/
+uv add cryptography
+```
+
+Then add the middleware and the registry test, and create one key per hop on your own machine,
+never in a chat. After `! ./scripts/ops/unlock.sh env`, this sets it without printing it; the
+caller gets the same value:
+
+```bash
+printf 'k1:%s' "$(openssl rand -base64 32)" | bash scripts/env/set.sh .env.development PAYLOAD_KEY
+```
+
+**Leave it out.** Nothing runs until you copy the module, so there is nothing to switch off: delete
+the files the contract's last section lists (`.claude/PAYLOAD-CONTRACT.md`, the payload rule,
+`AGENTS.md` §P and `scripts/check/payload-vectors.json`).
+
+**What it does not do.** Sealing a body does not replace TLS, and it is not full replay protection:
+inside the two-minute window an envelope can be replayed across ids of one route, which only a nonce
+store would stop. On a server-to-server hop, whose key never reaches a browser, it is real defence
+in depth when the hop crosses a network you do not own.
+
 ## See it in action
 
 <picture>
@@ -273,7 +362,8 @@ asks for reduced motion, they show a still picture instead.
   features;
 - want a security boundary against a hostile agent: the hooks read command text and are a guardrail
   against slips and injected instructions ([Security model](#security-model));
-- want a project generator: there is no application code here, only the layer around it.
+- want a project generator: there is no application code here, only the layer around it and the
+  optional payload module.
 
 ## Which template, or which plugin?
 
@@ -390,6 +480,9 @@ Every command below was run on a fresh folder; the outputs quoted are real.
    chmod +x .claude/hooks/*.sh .github/scripts/*.sh scripts/*/*.sh
    ```
 
+   The optional payload contract's rule and test vectors come with `.claude/` and `scripts/`; its
+   module stays in the template until you adopt it ([Payload encryption](#payload-encryption-sealed-bodies-and-one-endpoint-registry)).
+
 3. **Fill in the placeholders.** They are named, never blank, like `<repo-name>` and
    `your-github-handle`. This lists every one in the files to fill first;
    [SETUP § 2](SETUP.md#2-fill-in-every-placeholder) says what goes in each. `uv` refuses to run
@@ -476,7 +569,7 @@ of it.
 ```text
 your-repo/
 ├── CLAUDE.md                    Router: what to read for which task; loaded every session
-├── AGENTS.md                    27 numbered rules, each naming its check; Compliance Status
+├── AGENTS.md                    32 numbered rules, each naming its check; Compliance Status
 ├── SSOT.md                      Facts: module structure, layer rules, environment variables
 ├── .mcp.json                    MCP servers, pinned; secrets as ${VARIABLE} references
 ├── pyproject.toml               Settings for ruff, mypy, pytest, coverage, import-linter, …
@@ -491,11 +584,12 @@ your-repo/
 │   ├── settings.json            Hook wiring, allow/ask/deny permissions, the Bash sandbox
 │   ├── agent-config.example.json  Every hook setting with its default
 │   ├── hooks/                   8 hooks, lib.sh (shared) and README.md (rules, fail modes)
-│   ├── rules/                   12 rules: common/ (5), python/ (3), backend/ (4)
+│   ├── rules/                   13 rules: common/ (6), python/ (3), backend/ (4)
 │   ├── agents/                  ai-reviewer.md and INDEX.md
 │   ├── commands/                15 slash commands (generated from _workflow-source/)
 │   ├── anti-patterns/           6 known traps and INDEX.md
 │   ├── docs/                    code-review-checklist.md, read on demand
+│   ├── PAYLOAD-CONTRACT.md      The optional payload contract, read on demand
 │   ├── examples/pipeline/       Rules for a schema-owning service; not loaded until copied
 │   ├── mcp/                     deploy-platform, vps-provider and cloudflare, loaded on demand
 │   └── *.example.md             5 on-demand references: copy, fill in, or delete
@@ -506,7 +600,8 @@ your-repo/
 ├── scripts/
 │   ├── check/                   gates.sh + gates.list, ai-config.sh + its probes,
 │   │                            hook-probes.sh + .tsv, skills.sh, secrets.sh,
-│   │                            folder-shape.mjs, coverage-policy.mjs
+│   │                            folder-shape.mjs, coverage-policy.mjs,
+│   │                            payload-vectors.json (the payload contract's known answers)
 │   ├── env/                     show.sh (masked), set.sh (only while unlocked), envfile.py
 │   ├── ops/                     unlock.sh (only you run it), pr-ready.sh (merge readiness)
 │   ├── sync/workflows.sh        Writes the command copies; --check finds drift
@@ -519,8 +614,10 @@ your-repo/
     └── PULL_REQUEST_TEMPLATE/   dev.md and promotion.md
 ```
 
-No application source: no `src/`, no `Dockerfile`, no Alembic scaffold. `pyproject.toml` lists the
-runtime and tooling dependencies the rules assume, nothing more.
+No application source: no application code, no `Dockerfile`, no Alembic scaffold. `pyproject.toml`
+lists the runtime and tooling dependencies the rules assume, nothing more. The one piece of `src/`
+is the optional payload module (`src/app/core/payload/`, its tests and `payload.config.json`),
+copied only when you [adopt it](#payload-encryption-sealed-bodies-and-one-endpoint-registry).
 
 ## How the pieces fit
 
@@ -531,7 +628,7 @@ flowchart TD
     accTitle: The five layers of ai-agent-config
     accDescr: CLAUDE.md is loaded every session and points the agent to AGENTS.md for the rules and SSOT.md for the facts they rest on. The .claude folder enforces them during the session with hooks, path-scoped rules, a reviewer and commands. The gate enforces them again at every commit through pre-commit and at every pull request through CI.
     R["1 · Router<br/>CLAUDE.md, loaded every session"]
-    G["2 · Guardrail<br/>AGENTS.md, 27 numbered rules"]
+    G["2 · Guardrail<br/>AGENTS.md, 32 numbered rules"]
     C["3 · Contract<br/>SSOT.md: structure, layers, env vars"]
     M["4 · Machine<br/>.claude/: hooks, rules, reviewer, commands"]
     Q["5 · Gate<br/>pre-commit and quality-gate.yml, one gate list"]
@@ -551,10 +648,10 @@ flowchart TD
 
 | Layer | Files | Job | Size |
 | :--- | :--- | :--- | ---: |
-| **Router** | `CLAUDE.md` | What to read for which task. Loaded every session, so short | 158 lines |
-| **Guardrail** | `AGENTS.md` | Numbered rules, each naming its enforcement or `advisory` | 294 lines |
+| **Router** | `CLAUDE.md` | What to read for which task. Loaded every session, so short | 159 lines |
+| **Guardrail** | `AGENTS.md` | Numbered rules, each naming its enforcement or `advisory` | 322 lines |
 | **Contract** | `SSOT.md` | Module structure, layer rules, environment variables | 141 lines |
-| **Machine** | `.claude/`, `.mcp.json` | Hooks, path-scoped rules, reviewer, commands, anti-patterns | 63 files |
+| **Machine** | `.claude/`, `.mcp.json` | Hooks, path-scoped rules, reviewer, commands, anti-patterns | 65 files |
 | **Gate** | `.pre-commit-config.yaml`, `.github/`, `scripts/check/` | What "passing" means, at every commit and pull request | 7 workflows |
 
 The sizes are the unfilled template's. Yours grow as you fill in the Compliance Status table and
@@ -679,8 +776,9 @@ time. The numbered, enforced versions live in `AGENTS.md`; these are the deeper 
 
 | Name | What it does | How to use (loads when Claude touches) | Why it helps |
 | :--- | :--- | :--- | :--- |
-| [`common/working-agreements.md`](.claude/rules/common/working-agreements.md) | How work is done: communication, scope, evidence, order of work, shared checkouts, live systems, tool traps | every session (4,278 bytes) | A correction is made once, not every session |
+| [`common/working-agreements.md`](.claude/rules/common/working-agreements.md) | How work is done: communication, scope, evidence, order of work, shared checkouts, live systems, tool traps | every session (4,556 bytes) | A correction is made once, not every session |
 | [`common/coding-style.md`](.claude/rules/common/coding-style.md) | Python habits behind `AGENTS.md` §G (Rules 23–27): immutability, typing, async, errors, logging, one home per identifier | `src/**/*.py`, `tests/**/*.py`, `scripts/**/*.py` | Consistent code without restating it in `CLAUDE.md` |
+| [`common/payload-contract.md`](.claude/rules/common/payload-contract.md) (optional) | The short form of the [payload contract](#payload-encryption-sealed-bodies-and-one-endpoint-registry) behind `AGENTS.md` §P (Rules 28–32): strict unless exempted with a reason, one registry, encryption only in the middleware, the raw request read once, keys added and never repurposed, no sealed body in a log | `src/app/core/payload/**`, `src/app/main.py`, `scripts/check/payload-vectors.json`, `payload.config.json` | Plaintext and drift are caught while the code is written, not in review |
 | [`common/folder-shape.md`](.claude/rules/common/folder-shape.md) | SHAPE-1 to SHAPE-4: no loose files next to folders, tests mirror their source, no names like `misc` | `src/**`, `tests/**`, `scripts/**`, `components/**`, `lib/**` | A file's path is guessable from what it does |
 | [`common/patterns.md`](.claude/rules/common/patterns.md) | The patterns this repo uses, the ones it deliberately does not, and reuse before writing | `src/**/*.py` | No second way of doing the same thing |
 | [`common/testing.md`](.claude/rules/common/testing.md) | The two test tiers, 100% coverage, the async loop scope, faking through default parameters | `tests/**`, `pyproject.toml` | Tests that prove what they claim |
@@ -692,7 +790,7 @@ time. The numbered, enforced versions live in `AGENTS.md`; these are the deeper 
 | [`backend/performance.md`](.claude/rules/backend/performance.md) | Where time goes in an I/O-bound service: the event loop, connection budget, streaming, timeouts, caching | `src/app/**/*.py` | No blocking call stalls every request |
 | [`backend/testing.md`](.claude/rules/backend/testing.md) | How to test each layer behind §E (Rules 16–18): fake the `Protocol`, route tests on the real app | `tests/**`, `pyproject.toml` | Each layer is tested at the right level |
 
-Next to the rules, four kinds of reference load only when a task needs them:
+Next to the rules, five kinds of reference load only when a task needs them:
 
 | Name | What it does | How to use | Why it helps |
 | :--- | :--- | :--- | :--- |
@@ -700,6 +798,7 @@ Next to the rules, four kinds of reference load only when a task needs them:
 | [`.claude/docs/code-review-checklist.md`](.claude/docs/code-review-checklist.md) | The human checklist around the numbered rules: security triggers, severity levels | `/review` reads it; `/ship` fixes what it finds down to Medium | What no rule number covers still gets checked |
 | [`.claude/examples/pipeline/`](.claude/examples/pipeline/README.md) | Rules and gate steps for a service that owns its schema (Alembic, worker, CLI) | Copy into `.claude/rules/` only for the [pipeline shape](#request-serving-or-pipeline) | Never loaded by a request-serving service that does not need it |
 | `.claude/*.example.md` (5) | Templates for operations, CI runners, the database, analytics and a multi-repo Serena workspace | Copy to the name in `CLAUDE.md` § On-demand References, fill in, or delete | Facts Claude needs, loaded only for the task that needs them |
+| [`.claude/PAYLOAD-CONTRACT.md`](.claude/PAYLOAD-CONTRACT.md) | The payload contract in full: what it protects and what it does not, the wire format, the four policies, rules P1 to P10, the error codes, the switch, the keys, the shared vectors and the wiring | Read it before you adopt the module or touch the middleware; `CLAUDE.md` lists it on demand and the short rule loads by itself | Encryption is a written contract with a threat model, not a guess |
 
 <details>
 <summary>Every reference file, one line each</summary>
@@ -720,6 +819,7 @@ Next to the rules, four kinds of reference load only when a task needs them:
 | [`DATABASE.example.md`](.claude/DATABASE.example.md) | Postgres through the `db-dev` and `db-prod` MCP servers: topology, tunnel, production rules |
 | [`ANALYTICS.example.md`](.claude/ANALYTICS.example.md) | Read access to an analytics API; copied to `.claude/ANALYTICS.md` |
 | [`SERENA-WORKSPACE.example.md`](.claude/SERENA-WORKSPACE.example.md) | Scoping Serena in a workspace that spans several repos |
+| [`PAYLOAD-CONTRACT.md`](.claude/PAYLOAD-CONTRACT.md) | Sealed request and response bodies, the route registry and the keys, where adopted |
 
 </details>
 
@@ -741,6 +841,7 @@ runs it again in CI with the checks that need a runner.
 | [`scripts/check/coverage-policy.mjs`](scripts/check/coverage-policy.mjs) | Fails when the coverage gate itself was weakened: a threshold under 100, a logic folder out of scope, an exemption without a reason | `node scripts/check/coverage-policy.mjs` | 100% cannot quietly become 80% |
 | [`scripts/sync/workflows.sh`](scripts/sync/workflows.sh) | Writes `.claude/commands/` and `.agent/workflows/` from `_workflow-source/`; `--check` fails on drift or a command missing from `INDEX.md` | `bash scripts/sync/workflows.sh --check` | Command copies for two tools never drift apart |
 | [`scripts/vulture/whitelist.py`](scripts/vulture/whitelist.py) | Names what vulture must count as used, and who reads each entry | Add an entry with its reader; never real dead code | Dead-code findings are fixed, not silenced |
+| [`payload-vectors.json`](scripts/check/payload-vectors.json) + [`test_vectors.py`](tests/unit/core/payload/test_vectors.py) (optional) | The shared known answers of the [payload contract](#payload-encryption-sealed-bodies-and-one-endpoint-registry): this copy builds the authenticated data byte for byte, opens the committed ciphertexts, and refuses an envelope moved to another route, method, status, key or time | Runs with the unit tests once the module is adopted; alone: `env -u PYTHONPATH uv run pytest tests/unit/core/payload -q` | This copy and the TypeScript ones cannot drift apart unseen |
 | [`scripts/ops/unlock.sh`](scripts/ops/unlock.sh) | Opens `env` or `db` for a few minutes; `status` and `off` | `! ./scripts/ops/unlock.sh env` (you only) | Secrets and production writes open only when you say so |
 | [`scripts/env/show.sh`](scripts/env/show.sh) | Lists a `.env` file's keys with every secret masked, and the keys it lacks compared with its `.example` template | `bash scripts/env/show.sh .env.production` | Claude can debug configuration without seeing a secret |
 | [`scripts/env/set.sh`](scripts/env/set.sh) | Sets one key from stdin while `env` is unlocked; backs the file up and logs the key name, never the value | `printf '%s' "$VALUE" \| bash scripts/env/set.sh .env.production KEY` | A configuration fix without a secret in the transcript |
@@ -782,6 +883,9 @@ repo that owns its schema adds a Migration Drift Check and a Docs Drift Check
 
 Every workflow starts from a pull request: opened, updated, merged, or commented on with
 `/ask-deepseek`. Nothing runs on a push or on a schedule, and no bot opens update pull requests.
+The review, deploy and strip workflows are short callers of agent-config-kit's reusable workflows,
+pinned to the commit of its v1.2.0 release, so their logic is reviewed once and updated by changing
+one SHA.
 [CI/CD](#cicd) has the rules every workflow keeps to.
 
 | Name | What it does | How to use (runs when) | Why it helps |
@@ -790,9 +894,9 @@ Every workflow starts from a pull request: opened, updated, merged, or commented
 | [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Fails on a new or bumped dependency with a high or critical advisory; runs no project code | every pull request (a private repo also needs `CODE_SECURITY=true`) | Dependency updates are checked without a bot |
 | [`codeql.yml`](.github/workflows/codeql.yml) | CodeQL for `actions`, plus `python` once the repo tracks `.py` files; nothing compiled or run | every pull request (same `CODE_SECURITY` rule) | Code scanning with no weekly scheduled scan |
 | [`workflows-lint.yml`](.github/workflows/workflows-lint.yml) | actionlint with ShellCheck, zizmor and pinact on the workflow files | a pull request that changes `.github/`; never a required check | Unpinned actions and injectable `run:` steps are caught in review |
-| [`deepseek-review.yml`](.github/workflows/deepseek-review.yml) | Posts an AI review comment on the pull request | a pull request into `dev` opens, or a collaborator comments `/ask-deepseek` | A second opinion on every change, on demand; optional |
-| [`strip-ai-on-pr.yml`](.github/workflows/strip-ai-on-pr.yml) | Removes the AI layer from `prod`, merges `prod` back into `dev`, and verifies both | a pull request into `prod` is merged | The layer never ships, and `dev` keeps it |
-| [`ci-cd.yml`](.github/workflows/ci-cd.yml) | Fires your platform's deploy webhook through `trigger-deploy.sh`, with retries | a pull request into `prod` is merged; needs `DEPLOY_WEBHOOK_URL` | Only a reviewed merge deploys, and the platform builds from git |
+| [`deepseek-review.yml`](.github/workflows/deepseek-review.yml) | Posts a DeepSeek review as one comment, updated on each run, through the reusable `deepseek-review` workflow; needs `DEEPSEEK_API_KEY` | a pull request into `dev` opens, reopens or is marked ready, or a collaborator comments `/ask-deepseek` | A second opinion on every change, on demand; optional |
+| [`strip-ai-on-pr.yml`](.github/workflows/strip-ai-on-pr.yml) | Removes the AI layer from `prod`, merges `prod` back into `dev`, and verifies both, through the reusable `strip-ai` workflow (its list plus `promote-deploy-logs`, the same list as `strip-paths.sh`) | a pull request into `prod` is merged | The layer never ships, and `dev` keeps it |
+| [`ci-cd.yml`](.github/workflows/ci-cd.yml) | Fires your platform's deploy webhook through agent-config-kit's reusable deploy-webhook workflow, with retries | a pull request into `prod` is merged; needs `DEPLOY_WEBHOOK_URL` | Only a reviewed merge deploys, and the platform builds from git |
 | [`PULL_REQUEST_TEMPLATE/`](.github/PULL_REQUEST_TEMPLATE/dev.md) | `dev.md` (summary, how to verify, checklist) and `promotion.md` (the commits being promoted, checks before and after the merge) | `/create-pr` and `/promote` fill them in | Every pull request answers the same questions |
 
 The workflows keep their logic in `.github/scripts/`, so `/promote-deploy` can run the same steps
@@ -803,17 +907,17 @@ by hand when CI cannot:
 | [`quality-gate.sh`](.github/scripts/quality-gate.sh) | Every gate check plus the CI-only ones: the security audit, no committed `.env`, the comment rule, the production build, integration tests when `DATABASE_URL` is set. Lists every check that did not run | `bash .github/scripts/quality-gate.sh origin/dev` before a pull request; `--strict` turns a skipped check into a failure, as on a runner | A pull request fails on your laptop first |
 | [`check-comment-blocks.sh`](.github/scripts/check-comment-blocks.sh) | Fails on a comment block longer than two lines under `.github/` | `bash .github/scripts/check-comment-blocks.sh` | Explanations live in the docs, where they are kept up to date |
 | [`strip-paths.sh`](.github/scripts/strip-paths.sh) | The one list of what the strip removes from `prod` | Sourced by the three strip scripts; edit it to change what ships | The three scripts can never disagree |
-| [`strip-ai.sh`](.github/scripts/strip-ai.sh) | Removes the AI layer from `prod`, commits and pushes | Run by `strip-ai-on-pr.yml`; by you with `!` during `/promote-deploy` | The layer never reaches production |
+| [`strip-ai.sh`](.github/scripts/strip-ai.sh) | Removes the AI layer from `prod`, commits and pushes | Run by you with `!` during `/promote-deploy`; `strip-ai-on-pr.yml` strips the same list in CI | The layer never reaches production |
 | [`back-merge-prod.sh`](.github/scripts/back-merge-prod.sh) | Merges `prod` back into `dev` and puts the layer back | Same as `strip-ai.sh` | `dev` keeps the layer after every release |
 | [`verify-strip.sh`](.github/scripts/verify-strip.sh) | Checks that `prod` lost every stripped path and `dev` still has them; reads only | Run after the two above | A strip that half-landed fails loudly instead of silently |
-| [`trigger-deploy.sh`](.github/scripts/trigger-deploy.sh) | Posts to `DEPLOY_WEBHOOK_URL`, retrying while a build refuses connections | Run by `ci-cd.yml`; `/promote-deploy` names it for a manual deploy | One vendor-neutral deploy hook for any platform |
+| [`trigger-deploy.sh`](.github/scripts/trigger-deploy.sh) | Posts to `DEPLOY_WEBHOOK_URL`, retrying while a build refuses connections | `/promote-deploy` names it for a manual deploy; `ci-cd.yml` calls the same webhook in CI | One vendor-neutral deploy hook for any platform |
 
 ### Config files
 
 | Name | What it does | How to use | Why it helps |
 | :--- | :--- | :--- | :--- |
 | [`CLAUDE.md`](CLAUDE.md) | The router: project snapshot, quality gates, which file to read for which task. Loaded every session | Fill in the placeholders; keep it short | Always-loaded context stays small enough to be read |
-| [`AGENTS.md`](AGENTS.md) | 27 numbered rules in seven sections, each naming its check or `advisory`, and the Compliance Status table | Fill in the table; append rules, never renumber | Reviews cite "Rule 15", and the checks enforce it |
+| [`AGENTS.md`](AGENTS.md) | 32 numbered rules in eight sections, each naming its check or `advisory` (§P applies only where the payload contract is adopted), and the Compliance Status table | Fill in the table; append rules, never renumber | Reviews cite "Rule 15", and the checks enforce it |
 | [`SSOT.md`](SSOT.md) | The facts the rules rest on: module structure, layer rules, environment variables | Keep it true as the code changes | One place for facts, so rules never restate them |
 | [`.claude/settings.json`](.claude/settings.json) | Hook wiring, `allow`/`ask`/`deny` permission lists, and the Bash sandbox. The `deny` list keeps Claude from reading or editing real `.env*` files and from editing `AGENTS.md`, `SSOT.md` and `.claude/state/` | Edit it like code; personal overrides go in `.claude/settings.local.json` | The permission system and the sandbox back up the hooks, and the rulebook changes only when you change it |
 | [`.claude/agent-config.example.json`](.claude/agent-config.example.json) | Every hook setting with its default and an explanation | Copy the keys you change to `.claude/agent-config.json` | Tune one rule without editing a hook |
@@ -825,6 +929,7 @@ by hand when CI cannot:
 | [`.dockerignore`](.dockerignore) | Keeps every `.env*` file, `.git`, `.github` and the whole AI layer out of the build context | Keep it next to your `Dockerfile` | `COPY . .` cannot bake a secret or the layer into an image |
 | [`.gitleaks.toml`](.gitleaks.toml) | Keeps gitleaks' default rules and allows only two narrow patterns; no path is exempt | Add a pattern only for a proven false positive | The secret scan stays a scan, not decoration |
 | [`.skillspector-baseline.yaml`](.skillspector-baseline.yaml) | The skill scan's triage record: each accepted finding with its reason | Review every change to it by hand | The list of ignored findings is short and visible |
+| [`payload.config.json`](payload.config.json) (optional) | The payload contract's committed switch (`strict`), the exemptions with their reasons, and the peers | Copied when you [adopt the contract](#payload-encryption-sealed-bodies-and-one-endpoint-registry); `PAYLOAD_MODE` in your own shell overrides it for local debugging only | Every exception to encryption is one reviewed line with its reason |
 | [`.github/CODEOWNERS`](.github/CODEOWNERS) | Asks for a review on hooks, settings, gates, workflows and the files that decide what reaches production | Replace `your-github-handle` | A one-line change that switches a guard off gets a second look |
 | [`docs/unlock.md`](docs/unlock.md) | The `env` and `db` locks: what they stop, how you open them, what they do not stop | Read it once; Claude reads it when a lock is in the way | You know exactly what "locked" means |
 | [`.markdownlint-cli2.jsonc`](.markdownlint-cli2.jsonc) | Lint settings for this template's own docs; not copied into your repo | `markdownlint-cli2` | The docs stay readable |
@@ -1058,10 +1163,11 @@ The workflows themselves are listed under [CI workflows](#ci-workflows). This se
 policy they share, and the parts that need a longer explanation than a two-line comment.
 
 **What every workflow keeps to.** Top-level `permissions: contents: read`, with a job that writes
-asking at job level. `persist-credentials: false` on every checkout except the strip job, which
-pushes with that token. Every `uses:` is a full commit SHA with its version in a comment, and a
-service image carries a digest. Event data reaches a `run:` step through `env:`, never as an
-expression inside the script. Every job has `timeout-minutes`.
+asking at job level. `persist-credentials: false` on every checkout; the strip job gets its token
+through a git credential helper instead. Every `uses:` is a full commit SHA with its version in a
+comment, and a service image carries a digest; agent-config-kit's reusable workflows are pinned
+the same way, to the commit of its v1.2.0 release. Event data reaches a `run:` step through `env:`,
+never as an expression inside the script. Every job has `timeout-minutes`.
 
 **Updates without a bot.** Update on purpose, in an ordinary pull request that
 `dependency-review.yml` then checks: `pinact run -u --min-age 7` for actions (the minimum age is a
@@ -1096,7 +1202,7 @@ Nothing here is needed to read the layer; it is for wiring the gate into a real 
 | Setting | Where | Value |
 | :--- | :--- | :--- |
 | Squash merging | Settings → General → Pull Requests | **Off.** `/merge-pr` and `/promote` merge with `--merge` |
-| `DEEPSEEK_CODE_REVIEW_TOKEN` | secret, optional | only if you keep `deepseek-review.yml` |
+| `DEEPSEEK_API_KEY` | secret, optional | only if you keep `deepseek-review.yml` |
 | `DEPLOY_WEBHOOK_URL` | secret, optional | your platform's deploy webhook, only if you keep `ci-cd.yml` |
 | `CODE_SECURITY` | variable, private repositories | `true` once the repository has GitHub Code Security; until then dependency review and CodeQL skip, and `/merge-pr` asks you before it accepts a skipped check |
 | `CI_RUNNER`, `CI_RUNNER_FAST` | variables, optional | runner labels; unset means `ubuntu-latest` |
@@ -1104,6 +1210,29 @@ Nothing here is needed to read the layer; it is for wiring the gate into a real 
 
 Everything the layer needs is free on a public repository. On a private one, rulesets and GitHub
 Code Security are paid features; check GitHub's pricing page, since plans change.
+
+**Which job runs where.** Place a job by who waits for its result, not by how heavy it looks. The
+merge-blocking gate is the one job that must not die or stall, so only `quality-gate.yml` reads
+`CI_RUNNER_FAST` first. Everything that can fail without blocking anyone (the AI review, the scans,
+the workflow lint, the deploy and the strip after a merge) runs on `CI_RUNNER`, where minutes are
+cheapest. GitHub rounds each job up to a whole minute, so a faster runner saves nothing on a job
+that already finishes inside one. Any provider works: the workflows read only the labels.
+
+**Spending two free pools.** On a public repository GitHub-hosted runners are free with no minute
+limit: leave both variables unset. A private repository on the Free plan gets 2,000 minutes a month,
+and a third-party pool such as Blacksmith adds its own free minutes (3,000 a month). Spend both:
+install the provider's GitHub app, then put the gate on its label and leave `CI_RUNNER` unset, so
+the other jobs spend GitHub's minutes.
+
+```bash
+gh variable set CI_RUNNER_FAST --body blacksmith-2vcpu-ubuntu-2404   # the gate on the second pool
+gh variable set CI_RUNNER --body blacksmith-2vcpu-ubuntu-2404        # only once GitHub's minutes run out
+gh variable delete CI_RUNNER                                         # when the month resets
+```
+
+Quotas change, so check both price pages before you rely on them.
+[`.claude/CI-RUNNERS.example.md`](.claude/CI-RUNNERS.example.md) has the budget test to run before
+you move jobs, and the escape hatch for a pool that goes away.
 
 ## Request-serving or pipeline?
 
@@ -1164,13 +1293,15 @@ matching plugin's setup command produces, as plain files you can read before you
 
 | What | Cost |
 | :--- | :--- |
-| Context loaded in every session | 11,705 bytes: `CLAUDE.md` (7,427) and `working-agreements.md` (4,278); `ai-config.sh` fails above 15,000 |
-| Context loaded on demand | 11 path-scoped rules (37,469 bytes in all), each only while a matching file is in play |
+| Context loaded in every session | 12,078 bytes: `CLAUDE.md` (7,522) and `working-agreements.md` (4,556); `ai-config.sh` fails above 15,000 |
+| Context loaded on demand | 12 path-scoped rules (39,628 bytes in all), each only while a matching file is in play |
 | Command and subagent descriptions Claude Code lists | 3,309 bytes for 15 commands and one subagent |
 | `safety-check.sh` on one command | about 130 ms (median): `git status`, a refused force-push and a piped test run landed within 108–110 ms before the guard-script rules, which add about 17% (old and new run side by side) |
 | The other hooks | `db-guard.sh`, `mcp-guard.sh`, `migration-guard.sh`, `post-edit.sh` with ruff: about 75–105 ms; `post-commit.sh` after a commit: about 145 ms; `prompt-intent.sh`, `session-start.sh`: about 45–70 ms |
 | The hook probes at a commit that touches a hook | 2,333 probes in about nine and a half minutes (567 s on their own); the CI job allows 20 |
 | CI | pull requests only; nothing on push, nothing on a schedule, no update bot |
+| CI minutes | free and unmetered on a public repository; 2,000 a month on GitHub's Free plan for a private one. Each job is rounded up to a whole minute, so only the merge-blocking gate earns the fast pool |
+| A second free pool | a third-party runner such as Blacksmith adds its own free minutes (3,000 a month) through `CI_RUNNER_FAST` and `CI_RUNNER` ([GitHub repository configuration](#github-repository-configuration)) |
 
 Measured on an Apple M5 with macOS `/bin/bash` 3.2 and python3 3.14, median of 25 runs per hook,
 with a load average between 3 and 4. Hooks on the same event run side by side, and a `Bash` call
@@ -1275,7 +1406,7 @@ paths:
 - Amounts are integers in the smallest currency unit. Never floats.
 ```
 
-`bash scripts/check/ai-config.sh` still reports 11,705 always-loaded bytes afterwards. Without the
+`bash scripts/check/ai-config.sh` still reports 12,078 always-loaded bytes afterwards. Without the
 `paths:` list the rule would load every session and count toward the 15,000-byte budget. A rule
 that the team must follow belongs in `AGENTS.md` too, with a number and the check that enforces it.
 
@@ -1308,6 +1439,7 @@ bash scripts/sync/workflows.sh && bash scripts/sync/workflows.sh --check
 | Docker | the gate's production build |
 | `gh` | `pr-ready.sh` and the commands that open, merge and promote PRs |
 | jq (optional) | faster hook payload reads, and a fallback reader without python3 |
+| `cryptography` and `openssl` (optional) | the payload contract: the cipher, and generating its keys |
 
 ## FAQ and troubleshooting
 
@@ -1428,7 +1560,8 @@ Use [`docs-agent-config`](https://github.com/adhibuchori/docs-agent-config), whi
 - **Roadmap.** There is no dated roadmap. New work lands in
   [agent-config-kit](https://github.com/adhibuchori/agent-config-kit) first, as versioned plugins,
   and this template follows; its git history is the change log.
-- **Out of scope, on purpose:** application code, a project generator, TypeScript services (see
+- **Out of scope, on purpose:** application code (the payload module is a reference, not an app), a
+  project generator, TypeScript services (see
   [be-agent-config](https://github.com/adhibuchori/be-agent-config)), and scheduled CI of any kind.
   What the kit decided against, and why:
   [.out-of-scope](https://github.com/adhibuchori/agent-config-kit/blob/main/.out-of-scope/README.md).

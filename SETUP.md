@@ -74,7 +74,7 @@ grep -rn -e '<[A-Za-z]' -e 'your-github-handle' \
 | `.github/CODEOWNERS`                    | `@your-github-handle`                                                                                                                                           |
 | `.github/workflows/quality-gate.yml`    | `<user>`, `<password>` and `<database-name>` in `DATABASE_URL`, and the `<PROVIDER>_API_KEY` and `<SERVICE>_SERVICE_TOKEN` names your settings module validates |
 | `.github/scripts/quality-gate.sh`       | `<repo-name>` in the Production Build step                                                                                                                      |
-| `.github/workflows/deepseek-review.yml` | the two bracketed sentences in `sys-prompt`, if you keep the workflow (§ 4)                                                                                     |
+| `.github/workflows/deepseek-review.yml` | the two bracketed sentences in `instructions`, if you keep the workflow (§ 4)                                                                                   |
 | `.mcp.json`                             | nothing: delete the servers you do not use (§ 4)                                                                                                                |
 
 Some matches are shapes, not blanks, and stay as written: argument and path shapes in examples
@@ -231,28 +231,28 @@ get this whole layer as plugins rather than files, see README § Prefer plugins?
 
 ### AI code review on pull requests
 
-`.github/workflows/deepseek-review.yml` posts an AI review comment on pull requests into `dev`,
-using [`hustcer/deepseek-review`](https://github.com/hustcer/deepseek-review), which accepts any
-OpenAI-compatible endpoint. Add a `DEEPSEEK_CODE_REVIEW_TOKEN` secret and it runs. Fill in the two
-bracketed sentences of its `sys-prompt` first, so it does not invent findings against an
-architecture you do not have.
+`.github/workflows/deepseek-review.yml` posts a DeepSeek review of each pull request into `dev` as
+one comment, updated on later runs. It calls agent-config-kit's reusable `deepseek-review` workflow,
+pinned to one commit. Add a `DEEPSEEK_API_KEY` secret and it runs; without it the job passes and
+sends nothing. Fill in the two bracketed sentences of its `instructions` first, so it does not
+invent findings against an architecture you do not have. The diff is capped at 100 KB and the
+answer at 16,384 tokens: a review costs a cent or two, at most about ten US cents.
 
 **Two triggers, and where the secret is available.** It runs on `pull_request` and on an
 `/ask-deepseek` comment (`issue_comment`), never on `pull_request_target`:
 
-| Event                                           | Workflow file from              | `DEEPSEEK_CODE_REVIEW_TOKEN` | This workflow                                                           |
-| :---------------------------------------------- | :------------------------------ | :--------------------------- | :---------------------------------------------------------------------- |
-| `pull_request` from a branch of this repository | the pull request's merge commit | available                    | reviews                                                                 |
-| `pull_request` from a fork                      | the pull request's merge commit | withheld                     | skipped by the job's `if:`                                              |
-| `issue_comment` on a pull request               | the default branch              | available                    | reviews, only for `/ask-deepseek` from an owner, member or collaborator |
+| Event                                           | Workflow file from              | `DEEPSEEK_API_KEY` | This workflow                                                           |
+| :---------------------------------------------- | :------------------------------ | :----------------- | :---------------------------------------------------------------------- |
+| `pull_request` from a branch of this repository | the pull request's merge commit | available          | reviews                                                                 |
+| `pull_request` from a fork                      | the pull request's merge commit | withheld           | skipped by the job's `if:`                                              |
+| `issue_comment` on a pull request               | the default branch              | available          | reviews, only for `/ask-deepseek` from an owner, member or collaborator |
 
-No step checks out or runs the pull request's code: the action fetches the diff over the API. That
-keeps the comment path safe even on a fork's pull request, where it runs with the secret. Never add
-`actions/checkout` to this job.
+No step checks out or runs the pull request's code: the reusable workflow fetches the diff over the
+API, and it skips a fork's pull request on every event. Never add `actions/checkout` to this job.
 
 **`dev` only, and no `synchronize`.** A `dev → prod` diff re-adds the whole AI layer the strip
-removed and can exceed the provider's diff limit. Without `synchronize`, a push does not stack
-another review: comment `/ask-deepseek` to re-run it.
+removed. Each review costs tokens, so a push does not start one: comment `/ask-deepseek` to re-run
+it, and the one comment is updated.
 
 ---
 
@@ -473,14 +473,14 @@ Every image carries a digest, like every action carries a commit SHA. To pin ano
 
 ### Repository settings
 
-| Setting                               | Where                                      | Why                                                                                                                                                                                                              |
-| :------------------------------------ | :----------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Squash merging off**                | Settings → General → Pull Requests         | `/merge-pr` and `/promote` merge with `--merge`, and `/branch-cleanup` can only prove a merge commit merged (RATIONALE § 14)                                                                                     |
-| `DEEPSEEK_CODE_REVIEW_TOKEN` (secret) | Settings → Secrets and variables → Actions | only if you keep `deepseek-review.yml`                                                                                                                                                                           |
-| `DEPLOY_WEBHOOK_URL` (secret)         | same                                       | your platform's deploy webhook, fired when a pull request into `prod` is merged                                                                                                                                  |
-| `CODE_SECURITY=true` (variable)       | same                                       | a private repository with GitHub Code Security; until then dependency review and CodeQL skip                                                                                                                     |
-| `CI_RUNNER`, `CI_RUNNER_FAST`         | same, variables, optional                  | runner labels; unset means `ubuntu-latest` (`.claude/CI-RUNNERS.example.md`)                                                                                                                                     |
-| Required checks                       | a branch ruleset for `dev` and `prod`      | `Quality Gate`; `Dependency Review` and `Analyze (<language>)` only on a public repository or with `CODE_SECURITY=true`; never `Workflows Lint`, whose path filter keeps it from reporting on most pull requests |
+| Setting                         | Where                                      | Why                                                                                                                                                                                                              |
+| :------------------------------ | :----------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Squash merging off**          | Settings → General → Pull Requests         | `/merge-pr` and `/promote` merge with `--merge`, and `/branch-cleanup` can only prove a merge commit merged (RATIONALE § 14)                                                                                     |
+| `DEEPSEEK_API_KEY` (secret)     | Settings → Secrets and variables → Actions | only if you keep `deepseek-review.yml`                                                                                                                                                                           |
+| `DEPLOY_WEBHOOK_URL` (secret)   | same                                       | your platform's deploy webhook, fired when a pull request into `prod` is merged                                                                                                                                  |
+| `CODE_SECURITY=true` (variable) | same                                       | a private repository with GitHub Code Security; until then dependency review and CodeQL skip                                                                                                                     |
+| `CI_RUNNER`, `CI_RUNNER_FAST`   | same, variables, optional                  | runner labels; unset means `ubuntu-latest` (`.claude/CI-RUNNERS.example.md`)                                                                                                                                     |
+| Required checks                 | a branch ruleset for `dev` and `prod`      | `Quality Gate`; `Dependency Review` and `Analyze (<language>)` only on a public repository or with `CODE_SECURITY=true`; never `Workflows Lint`, whose path filter keeps it from reporting on most pull requests |
 
 A job skipped by its `if:` reports success, so requiring Dependency Review or CodeQL on a private
 repository without Code Security proves nothing. `scripts/ops/pr-ready.sh` does not count a skipped
@@ -529,6 +529,10 @@ it.**
 | `strip-ai.sh`        | Removes those paths on the production branch                               |
 | `verify-strip.sh`    | Asserts they are gone from `prod` **and still present on `dev`**           |
 | `back-merge-prod.sh` | Merges `prod` back into `dev` so the branches do not diverge               |
+
+In CI, `strip-ai-on-pr.yml` runs agent-config-kit's reusable strip workflow instead of these
+scripts: its default list plus `promote-deploy-logs` is exactly `STRIP_PATHS`, and its checkout
+keeps no token. `/promote-deploy` runs the scripts by hand. Change both lists together.
 
 Three things that are not obvious:
 

@@ -42,12 +42,14 @@ serangkaian pemeriksaan membuktikannya di setiap commit dan setiap pull request.
 > dilindungi, membaca file `.env`, atau menulis ke database produksi tanpa Anda. Setiap commit
 > menjalankan 15 pemeriksaan dari satu daftar gate, dan CI menjalankannya lagi. `/plan`, `/review`,
 > `/commit`, `/create-pr`, dan `/merge-pr` mengantar setiap perubahan dari ide sampai merge. Hook
-> berjalan di mesin Anda dan tidak membuka koneksi jaringan. Lebih suka plugin daripada file
-> salinan? Lihat [Lebih suka plugin?](#lebih-suka-plugin).
+> berjalan di mesin Anda dan tidak membuka koneksi jaringan. Modul opsional menyegel setiap body
+> request dan response antarlayanan. Lebih suka plugin daripada file salinan? Lihat
+> [Lebih suka plugin?](#lebih-suka-plugin).
 
 ## Daftar isi
 
 - [Mengapa template ini ada](#mengapa-template-ini-ada)
+- [Enkripsi payload](#enkripsi-payload-body-tersegel-dan-satu-registry-endpoint)
 - [Lihat cara kerjanya](#lihat-cara-kerjanya)
 - [Untuk siapa, dan bukan untuk siapa](#untuk-siapa-dan-bukan-untuk-siapa)
 - [Template atau plugin yang mana?](#template-atau-plugin-yang-mana)
@@ -203,6 +205,102 @@ pesan itu muncul dalam sebuah sesi.
 
 </details>
 
+## Enkripsi payload: body tersegel dan satu registry endpoint
+
+Modul andalan, dan opsional. Setelah Anda mengadopsinya, setiap body request dan response yang
+melintasi batas layanan berjalan dalam keadaan tersegel, setiap route berada di satu registry dengan
+kebijakan enkripsinya di samping path-nya, dan gate menjaga keduanya tetap benar sebelum apa pun
+di-merge. Salinan Python ini berbicara dengan format wire yang sama dengan template frontend dan
+backend, dibuktikan dengan satu set test vector bersama.
+[`.claude/PAYLOAD-CONTRACT.md`](.claude/PAYLOAD-CONTRACT.md) adalah kontrak lengkapnya: model
+ancaman, format wire, kebijakan, aturan P1 sampai P10, kunci, dan cara memasangnya.
+
+**Cara kerjanya.** Body yang tersegel adalah envelope AES-256-GCM berisi enam field (`v`, `alg`,
+`kid`, `iv`, `ct`, `ts`), dikirim sebagai `application/vnd.payload-envelope+json`. Data
+terautentikasinya tidak pernah ikut dikirim: isinya method (atau status response), pola route di
+registry, id kunci, dan waktu penyegelan, sehingga envelope itu tidak bisa dibuka di route lain, dan
+envelope yang berselisih lebih dari 120 detik dengan jam penerima ditolak sebelum cipher berjalan.
+Layanan ini dan setiap pemanggilnya berbagi satu kunci AES-256 per hop (`kid:base64` dalam satu
+variabel; rotasi menambahkan `<NAME>_NEXT`), dan layanan menjawab dengan kunci yang disebut
+request-nya, sehingga beberapa pemanggil bisa memegang kunci yang berbeda. `PayloadMiddleware`,
+middleware ASGI biasa, membuka request sebelum route atau validator mana pun berjalan dan menyegel
+response-nya, jadi handler dan service hanya melihat objek biasa. FastAPI membangun spec-nya saat
+runtime, jadi registry-nya adalah satu dict di kode Anda, dan tes yang menelusuri `app.routes` gagal
+pada route yang tidak disebutnya. Sebuah route hanya bisa keluar dari `strict` lewat pengecualian di
+`payload.config.json` yang menyebut alasannya. Penolakan keluar sebagai problem+json teks biasa
+dengan kode `ENVELOPE_*`, dan kode status tetap terbaca tanpa dekripsi.
+
+1. **Pemanggil mengirim teks biasa ke route yang tersegel.**
+   *Masalahnya:* sebuah skrip atau client lama mengirim JSON biasa, dan jawabannya berjalan tanpa
+   enkripsi sementara request lain tersegel; tidak ada yang sadar, karena semuanya berfungsi.
+   *Solusinya:* middleware menolak body teks biasa di route yang tersegel dengan
+   `ENVELOPE_REQUIRED` sebelum route mana pun berjalan, dan penolakannya membawa kode, tidak pernah
+   payload.
+   *Ditangani oleh:* [`middleware.py`](src/app/core/payload/middleware.py),
+   [`policy.py`](src/app/core/payload/policy.py).
+2. **Dua salinan cipher saling melenceng.**
+   *Masalahnya:* salinan milik backend mengubah cara ia menyusun data terautentikasi; tes di kedua
+   repo tetap hijau, dan setiap panggilan di antara keduanya gagal dengan error yang tidak
+   menjelaskan apa-apa.
+   *Solusinya:* salinan ini membuka ciphertext yang sama yang sudah di-commit dan menolak replay yang
+   sama dengan salinan lainnya, di `test_vectors.py`, di setiap commit.
+   *Ditangani oleh:* [`payload-vectors.json`](scripts/check/payload-vectors.json),
+   [`test_vectors.py`](tests/unit/core/payload/test_vectors.py).
+3. **Saklar debugging terbawa ke produksi.**
+   *Masalahnya:* seseorang mematikan enkripsi untuk mengejar bug, dan branch-nya di-merge dalam
+   keadaan itu.
+   *Solusinya:* `resolve_encryption_mode` menolak `off` di produksi saat startup, sehingga layanan
+   yang di-merge dengan saklar terbalik gagal berjalan alih-alih melayani teks biasa; debugging
+   memakai `PAYLOAD_MODE=off` di shell Anda sendiri, dan `payload.config.json` yang di-commit
+   bernilai `strict`.
+   *Ditangani oleh:* [`mode.py`](src/app/core/payload/mode.py),
+   [`payload.config.json`](payload.config.json).
+4. **Request yang tertangkap diputar ulang di route lain.**
+   *Masalahnya:* envelope yang diambil dari log dikirim ke endpoint yang lebih berbahaya.
+   *Solusinya:* data terautentikasinya menyebut method, pola route, id kunci, dan waktunya, jadi
+   envelope itu tidak bisa dibuka di tempat lain, dan yang lebih tua dari dua menit ditolak sebelum
+   cipher berjalan.
+   *Ditangani oleh:* [`envelope.py`](src/app/core/payload/envelope.py),
+   [`codec.py`](src/app/core/payload/codec.py).
+
+| Bagian | Fungsinya | Cara pakai | Manfaatnya |
+| :--- | :--- | :--- | :--- |
+| [`src/app/core/payload/`](src/app/core/payload/) | Cipher (AES-256-GCM lewat `cryptography`), key ring pre-shared dengan rotasi, saklar strict/off, pencocok route, dan middleware ASGI; tes dengan branch coverage 100% di `tests/unit/core/payload/` | `app.add_middleware(PayloadMiddleware, mode=…, registry=ROUTES, key_ring=…)`, ditambahkan paling awal supaya berjalan paling dalam | Referensi yang sudah di-review, bukan kripto buatan sendiri |
+| Registry route | Satu dict berisi entri `Endpoint`, masing-masing dengan kebijakannya dan, bila bukan `strict`, alasannya | Sebut setiap route di sana; tes yang menelusuri `app.routes` gagal pada route yang tidak ada (`AGENTS.md` Rule 29) | Setiap route punya kebijakan yang sudah diputuskan |
+| [`payload.config.json`](payload.config.json) | Saklar yang di-commit, pengecualian beserta alasannya, dan peer | Pertahankan `"encryption": "strict"`; tambahkan `"METHOD /pattern": { "encryption", "reason" }` di `exemptions` | Pengecualian enkripsi adalah satu baris yang di-review beserta alasannya |
+| [`payload-vectors.json`](scripts/check/payload-vectors.json) | Jawaban yang sudah diketahui bersama: data terautentikasi, ciphertext yang harus dibuka, replay yang harus ditolak | Dibaca `test_vectors.py`; tidak pernah di-generate ulang supaya salinan yang gagal jadi lolos | Salinan ini dan salinan TypeScript tidak bisa melenceng tanpa ketahuan |
+
+**Adopsi.** Mulai cepat sudah menyalin kontraknya, aturannya, dan test vector-nya. Salin modulnya
+dari root proyek Anda, dengan `CFG` diset seperti di [Mulai cepat](#mulai-cepat), lalu tambahkan
+satu dependensinya:
+
+```bash
+cp "$CFG"/payload.config.json .
+mkdir -p src/app/core tests/unit/core
+cp -R "$CFG"/src/app/core/payload src/app/core/
+cp -R "$CFG"/tests/unit/core/payload tests/unit/core/
+uv add cryptography
+```
+
+Lalu tambahkan middleware dan tes registry-nya, dan buat satu kunci per hop di mesin Anda sendiri,
+jangan pernah di chat. Setelah `! ./scripts/ops/unlock.sh env`, perintah ini mengisinya tanpa
+mencetaknya; pemanggilnya mendapat nilai yang sama:
+
+```bash
+printf 'k1:%s' "$(openssl rand -base64 32)" | bash scripts/env/set.sh .env.development PAYLOAD_KEY
+```
+
+**Tidak memakainya.** Tidak ada yang berjalan sampai Anda menyalin modulnya, jadi tidak ada yang
+perlu dimatikan: hapus file-file yang didaftar di bagian terakhir kontraknya
+(`.claude/PAYLOAD-CONTRACT.md`, aturan payload, `AGENTS.md` §P, dan
+`scripts/check/payload-vectors.json`).
+
+**Apa yang tidak dilakukannya.** Menyegel body tidak menggantikan TLS, dan bukan perlindungan replay
+yang penuh: di dalam jendela dua menit sebuah envelope bisa diputar ulang antar-id pada satu route,
+yang hanya bisa dicegah dengan nonce store. Pada hop server-ke-server, yang kuncinya tidak pernah
+sampai ke browser, ini adalah pertahanan berlapis yang nyata bila hop itu melintasi jaringan yang
+bukan milik Anda.
+
 ## Lihat cara kerjanya
 
 <picture>
@@ -286,7 +384,8 @@ meminta gerakan dikurangi (reduced motion), yang tampil adalah gambar diam.
 - menginginkan batas keamanan terhadap agen yang berniat jahat: hook membaca teks perintah dan
   merupakan pagar pengaman terhadap kekeliruan dan instruksi yang disusupkan
   ([Model keamanan](#model-keamanan));
-- mencari generator proyek: tidak ada kode aplikasi di sini, hanya lapisan di sekelilingnya.
+- mencari generator proyek: tidak ada kode aplikasi di sini, hanya lapisan di sekelilingnya dan
+  modul payload yang opsional.
 
 ## Template atau plugin yang mana?
 
@@ -407,6 +506,9 @@ keluaran asli.
    chmod +x .claude/hooks/*.sh .github/scripts/*.sh scripts/*/*.sh
    ```
 
+   Aturan dan test vector kontrak payload yang opsional ikut bersama `.claude/` dan `scripts/`;
+   modulnya tetap di template sampai Anda mengadopsinya ([Enkripsi payload](#enkripsi-payload-body-tersegel-dan-satu-registry-endpoint)).
+
 3. **Isi placeholder-nya.** Semuanya bernama, tidak pernah kosong, misalnya `<repo-name>` dan
    `your-github-handle`. Perintah ini mendaftar semuanya di file yang perlu diisi lebih dulu;
    [SETUP § 2](SETUP.md#2-fill-in-every-placeholder) menjelaskan isi masing-masing. `uv` menolak
@@ -494,7 +596,7 @@ dan bukan bagian darinya.
 ```text
 repo-anda/
 ├── CLAUDE.md                    Router: apa yang dibaca untuk tugas apa; dimuat setiap sesi
-├── AGENTS.md                    27 aturan bernomor, masing-masing menyebut pemeriksaannya
+├── AGENTS.md                    32 aturan bernomor, masing-masing menyebut pemeriksaannya
 ├── SSOT.md                      Fakta: struktur modul, aturan lapisan, variabel lingkungan
 ├── .mcp.json                    Server MCP, di-pin; rahasia sebagai referensi ${VARIABLE}
 ├── pyproject.toml               Pengaturan ruff, mypy, pytest, coverage, import-linter, …
@@ -509,11 +611,12 @@ repo-anda/
 │   ├── settings.json            Wiring hook, izin allow/ask/deny, sandbox Bash
 │   ├── agent-config.example.json  Setiap pengaturan hook beserta nilai bawaannya
 │   ├── hooks/                   8 hook, lib.sh (bersama) dan README.md (aturan, mode gagal)
-│   ├── rules/                   12 aturan: common/ (5), python/ (3), backend/ (4)
+│   ├── rules/                   13 aturan: common/ (6), python/ (3), backend/ (4)
 │   ├── agents/                  ai-reviewer.md dan INDEX.md
 │   ├── commands/                15 slash command (dihasilkan dari _workflow-source/)
 │   ├── anti-patterns/           6 jebakan yang sudah dikenal dan INDEX.md
 │   ├── docs/                    code-review-checklist.md, dibaca saat dibutuhkan
+│   ├── PAYLOAD-CONTRACT.md      Kontrak payload yang opsional, dibaca saat dibutuhkan
 │   ├── examples/pipeline/       Aturan untuk layanan pemilik skema; tidak dimuat sebelum disalin
 │   ├── mcp/                     Server deploy-platform, vps-provider, cloudflare; dimuat saat perlu
 │   └── *.example.md             5 referensi sesuai kebutuhan: salin, isi, atau hapus
@@ -524,7 +627,8 @@ repo-anda/
 ├── scripts/
 │   ├── check/                   gates.sh + gates.list, ai-config.sh + probe-nya,
 │   │                            hook-probes.sh + .tsv, skills.sh, secrets.sh,
-│   │                            folder-shape.mjs, coverage-policy.mjs
+│   │                            folder-shape.mjs, coverage-policy.mjs,
+│   │                            payload-vectors.json (jawaban baku kontrak payload)
 │   ├── env/                     show.sh (tersamar), set.sh (hanya saat terbuka), envfile.py
 │   ├── ops/                     unlock.sh (hanya Anda yang menjalankan), pr-ready.sh
 │   ├── sync/workflows.sh        Menulis salinan perintah; --check mendeteksi pergeseran
@@ -537,8 +641,10 @@ repo-anda/
     └── PULL_REQUEST_TEMPLATE/   dev.md dan promotion.md
 ```
 
-Tidak ada kode aplikasi: tidak ada `src/`, tidak ada `Dockerfile`, tidak ada kerangka Alembic.
+Tidak ada kode aplikasi: tidak ada aplikasi, tidak ada `Dockerfile`, tidak ada kerangka Alembic.
 `pyproject.toml` hanya mendaftar dependensi runtime dan tooling yang diasumsikan aturan-aturannya.
+Satu-satunya isi `src/` adalah modul payload yang opsional (`src/app/core/payload/`, tesnya, dan
+`payload.config.json`), yang hanya disalin bila Anda [mengadopsinya](#enkripsi-payload-body-tersegel-dan-satu-registry-endpoint).
 
 ## Bagaimana bagian-bagiannya saling terhubung
 
@@ -550,7 +656,7 @@ flowchart TD
     accTitle: Lima lapisan ai-agent-config
     accDescr: CLAUDE.md dimuat setiap sesi dan mengarahkan agen ke AGENTS.md untuk aturan dan ke SSOT.md untuk fakta yang mendasarinya. Folder .claude menegakkannya selama sesi dengan hook, aturan per path, reviewer, dan perintah. Gate menegakkannya lagi di setiap commit lewat pre-commit dan di setiap pull request lewat CI.
     R["1 · Router<br/>CLAUDE.md, dimuat setiap sesi"]
-    G["2 · Guardrail<br/>AGENTS.md, 27 aturan bernomor"]
+    G["2 · Guardrail<br/>AGENTS.md, 32 aturan bernomor"]
     C["3 · Kontrak<br/>SSOT.md: struktur, lapisan, variabel env"]
     M["4 · Mesin<br/>.claude/: hook, aturan, reviewer, perintah"]
     Q["5 · Gate<br/>pre-commit dan quality-gate.yml, satu daftar gate"]
@@ -571,10 +677,10 @@ flowchart TD
 
 | Lapisan | File | Tugas | Ukuran |
 | :--- | :--- | :--- | ---: |
-| **Router** | `CLAUDE.md` | Apa yang dibaca untuk tugas apa. Dimuat setiap sesi, jadi pendek | 158 baris |
-| **Guardrail** | `AGENTS.md` | Aturan bernomor, masing-masing menyebut penegaknya atau `advisory` | 294 baris |
+| **Router** | `CLAUDE.md` | Apa yang dibaca untuk tugas apa. Dimuat setiap sesi, jadi pendek | 159 baris |
+| **Guardrail** | `AGENTS.md` | Aturan bernomor, masing-masing menyebut penegaknya atau `advisory` | 322 baris |
 | **Kontrak** | `SSOT.md` | Struktur modul, aturan lapisan, variabel lingkungan | 141 baris |
-| **Mesin** | `.claude/`, `.mcp.json` | Hook, aturan per path, reviewer, perintah, anti-pattern | 63 file |
+| **Mesin** | `.claude/`, `.mcp.json` | Hook, aturan per path, reviewer, perintah, anti-pattern | 65 file |
 | **Gate** | `.pre-commit-config.yaml`, `.github/`, `scripts/check/` | Apa arti "lolos", di setiap commit dan pull request | 7 workflow |
 
 Ukuran di atas adalah ukuran template yang belum diisi. Punya Anda akan bertambah saat tabel
@@ -705,8 +811,9 @@ ini adalah rujukan yang lebih mendalam.
 
 | Nama | Fungsinya | Cara pakai (dimuat saat Claude menyentuh) | Manfaatnya |
 | :--- | :--- | :--- | :--- |
-| [`common/working-agreements.md`](.claude/rules/common/working-agreements.md) | Cara bekerja: komunikasi, cakupan, bukti, urutan kerja, checkout bersama, sistem live, jebakan tool | setiap sesi (4.278 byte) | Koreksi cukup dilakukan sekali, bukan setiap sesi |
+| [`common/working-agreements.md`](.claude/rules/common/working-agreements.md) | Cara bekerja: komunikasi, cakupan, bukti, urutan kerja, checkout bersama, sistem live, jebakan tool | setiap sesi (4.556 byte) | Koreksi cukup dilakukan sekali, bukan setiap sesi |
 | [`common/coding-style.md`](.claude/rules/common/coding-style.md) | Kebiasaan Python di balik `AGENTS.md` §G (Rules 23–27): imutabilitas, typing, async, error, logging, satu rumah untuk setiap identifier | `src/**/*.py`, `tests/**/*.py`, `scripts/**/*.py` | Kode yang konsisten tanpa mengulanginya di `CLAUDE.md` |
+| [`common/payload-contract.md`](.claude/rules/common/payload-contract.md) (opsional) | Versi singkat [kontrak payload](#enkripsi-payload-body-tersegel-dan-satu-registry-endpoint) di balik `AGENTS.md` §P (Rules 28–32): strict kecuali dikecualikan dengan alasan, satu registry, enkripsi hanya di middleware, request mentah dibaca sekali, kunci ditambah dan tidak pernah dialihfungsikan, tidak ada body tersegel di log | `src/app/core/payload/**`, `src/app/main.py`, `scripts/check/payload-vectors.json`, `payload.config.json` | Teks biasa dan drift tertangkap saat kode ditulis, bukan saat review |
 | [`common/folder-shape.md`](.claude/rules/common/folder-shape.md) | SHAPE-1 sampai SHAPE-4: tidak ada file lepas di samping folder, tes mencerminkan sumbernya, tidak ada nama seperti `misc` | `src/**`, `tests/**`, `scripts/**`, `components/**`, `lib/**` | Path sebuah file bisa ditebak dari fungsinya |
 | [`common/patterns.md`](.claude/rules/common/patterns.md) | Pola yang dipakai repo ini, pola yang sengaja tidak dipakai, dan memakai ulang sebelum menulis | `src/**/*.py` | Tidak ada cara kedua untuk hal yang sama |
 | [`common/testing.md`](.claude/rules/common/testing.md) | Dua tingkat tes, cakupan 100%, cakupan event loop async, pemalsuan lewat parameter bawaan | `tests/**`, `pyproject.toml` | Tes yang membuktikan apa yang diklaimnya |
@@ -718,7 +825,7 @@ ini adalah rujukan yang lebih mendalam.
 | [`backend/performance.md`](.claude/rules/backend/performance.md) | Ke mana waktu habis di layanan yang terikat I/O: event loop, anggaran koneksi, streaming, batas waktu, caching | `src/app/**/*.py` | Tidak ada panggilan blocking yang menahan setiap request |
 | [`backend/testing.md`](.claude/rules/backend/testing.md) | Cara menguji setiap lapisan di balik §E (Rules 16–18): palsukan `Protocol`-nya, tes route pada app sungguhan | `tests/**`, `pyproject.toml` | Setiap lapisan diuji di tingkat yang tepat |
 
-Di samping aturan, ada empat jenis referensi yang hanya dimuat saat tugas membutuhkannya:
+Di samping aturan, ada lima jenis referensi yang hanya dimuat saat tugas membutuhkannya:
 
 | Nama | Fungsinya | Cara pakai | Manfaatnya |
 | :--- | :--- | :--- | :--- |
@@ -726,6 +833,7 @@ Di samping aturan, ada empat jenis referensi yang hanya dimuat saat tugas membut
 | [`.claude/docs/code-review-checklist.md`](.claude/docs/code-review-checklist.md) | Checklist manusia di sekitar aturan bernomor: pemicu review keamanan, tingkat keparahan | `/review` membacanya; `/ship` memperbaiki temuannya sampai tingkat Medium | Yang tidak tercakup nomor aturan tetap diperiksa |
 | [`.claude/examples/pipeline/`](.claude/examples/pipeline/README.md) | Aturan dan langkah gate untuk layanan yang memiliki skemanya sendiri (Alembic, worker, CLI) | Salin ke `.claude/rules/` hanya untuk [bentuk pipeline](#melayani-request-atau-pipeline) | Tidak pernah dimuat oleh layanan request yang tidak membutuhkannya |
 | `.claude/*.example.md` (5) | Template untuk operasional, runner CI, database, analitik, dan workspace Serena multi-repo | Salin ke nama di `CLAUDE.md` § On-demand References, isi, atau hapus | Fakta yang dibutuhkan Claude, dimuat hanya untuk tugas yang membutuhkannya |
+| [`.claude/PAYLOAD-CONTRACT.md`](.claude/PAYLOAD-CONTRACT.md) | Kontrak payload selengkapnya: apa yang dilindungi dan apa yang tidak, format wire, empat kebijakan, aturan P1 sampai P10, kode error, saklar, kunci, test vector bersama, dan cara memasangnya | Baca sebelum mengadopsi modulnya atau menyentuh middleware; `CLAUDE.md` mencantumkannya untuk dibaca saat dibutuhkan, dan aturan singkatnya dimuat sendiri | Enkripsi menjadi kontrak tertulis dengan model ancaman, bukan tebakan |
 
 <details>
 <summary>Setiap file referensi, masing-masing satu baris</summary>
@@ -746,6 +854,7 @@ Di samping aturan, ada empat jenis referensi yang hanya dimuat saat tugas membut
 | [`DATABASE.example.md`](.claude/DATABASE.example.md) | Postgres lewat server MCP `db-dev` dan `db-prod`: topologi, tunnel, aturan produksi |
 | [`ANALYTICS.example.md`](.claude/ANALYTICS.example.md) | Akses baca ke API analitik; disalin menjadi `.claude/ANALYTICS.md` |
 | [`SERENA-WORKSPACE.example.md`](.claude/SERENA-WORKSPACE.example.md) | Membatasi Serena di workspace yang mencakup beberapa repo |
+| [`PAYLOAD-CONTRACT.md`](.claude/PAYLOAD-CONTRACT.md) | Body request dan response yang tersegel, registry route, dan kuncinya, bila diadopsi |
 
 </details>
 
@@ -768,6 +877,7 @@ membutuhkan runner.
 | [`scripts/check/coverage-policy.mjs`](scripts/check/coverage-policy.mjs) | Gagal jika gate cakupan itu sendiri dilemahkan: ambang di bawah 100, folder logika keluar dari cakupan, pengecualian tanpa alasan | `node scripts/check/coverage-policy.mjs` | 100% tidak bisa diam-diam menjadi 80% |
 | [`scripts/sync/workflows.sh`](scripts/sync/workflows.sh) | Menulis `.claude/commands/` dan `.agent/workflows/` dari `_workflow-source/`; `--check` gagal jika ada pergeseran atau perintah yang tidak tercantum di `INDEX.md` | `bash scripts/sync/workflows.sh --check` | Salinan perintah untuk dua tool tidak pernah berbeda |
 | [`scripts/vulture/whitelist.py`](scripts/vulture/whitelist.py) | Menyebut apa yang harus dianggap terpakai oleh vulture, dan siapa pembaca setiap entri | Tambah entri beserta pembacanya; jangan pernah kode mati sungguhan | Temuan kode mati diperbaiki, bukan dibungkam |
+| [`payload-vectors.json`](scripts/check/payload-vectors.json) + [`test_vectors.py`](tests/unit/core/payload/test_vectors.py) (opsional) | Jawaban baku bersama [kontrak payload](#enkripsi-payload-body-tersegel-dan-satu-registry-endpoint): salinan ini menyusun data terautentikasi byte demi byte, membuka ciphertext yang di-commit, dan menolak envelope yang dipindah ke route, method, status, kunci, atau waktu lain | Berjalan bersama unit test setelah modulnya diadopsi; tersendiri: `env -u PYTHONPATH uv run pytest tests/unit/core/payload -q` | Salinan ini dan salinan TypeScript tidak bisa melenceng tanpa ketahuan |
 | [`scripts/ops/unlock.sh`](scripts/ops/unlock.sh) | Membuka `env` atau `db` selama beberapa menit; `status` dan `off` | `! ./scripts/ops/unlock.sh env` (hanya Anda) | Rahasia dan penulisan ke produksi terbuka hanya saat Anda bilang begitu |
 | [`scripts/env/show.sh`](scripts/env/show.sh) | Mendaftar key file `.env` dengan setiap rahasia disamarkan, dan key yang kurang dibanding template `.example`-nya | `bash scripts/env/show.sh .env.production` | Claude bisa men-debug konfigurasi tanpa melihat rahasia |
 | [`scripts/env/set.sh`](scripts/env/set.sh) | Mengisi satu key dari stdin selama `env` terbuka; mencadangkan file dan mencatat nama key, tidak pernah nilainya | `printf '%s' "$VALUE" \| bash scripts/env/set.sh .env.production KEY` | Perbaikan konfigurasi tanpa rahasia di transkrip |
@@ -809,7 +919,10 @@ Check dan Docs Drift Check ([Melayani request atau pipeline?](#melayani-request-
 
 Setiap workflow dimulai dari pull request: dibuka, diperbarui, di-merge, atau dikomentari dengan
 `/ask-deepseek`. Tidak ada yang berjalan saat push atau terjadwal, dan tidak ada bot yang membuka
-pull request pembaruan. [CI/CD](#cicd) berisi aturan yang dipegang setiap workflow.
+pull request pembaruan. [CI/CD](#cicd) berisi aturan yang dipegang setiap workflow. Workflow review,
+deploy, dan strip hanyalah pemanggil pendek bagi reusable workflow milik agent-config-kit, di-pin ke
+commit rilis v1.2.0-nya, sehingga logikanya di-review sekali dan diperbarui dengan mengganti satu
+SHA.
 
 | Nama | Fungsinya | Cara pakai (kapan berjalan) | Manfaatnya |
 | :--- | :--- | :--- | :--- |
@@ -817,9 +930,9 @@ pull request pembaruan. [CI/CD](#cicd) berisi aturan yang dipegang setiap workfl
 | [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Gagal jika ada dependensi baru atau yang naik versi dengan advisory tingkat tinggi atau kritis; tidak menjalankan kode proyek | setiap pull request (repo privat juga butuh `CODE_SECURITY=true`) | Pembaruan dependensi diperiksa tanpa bot |
 | [`codeql.yml`](.github/workflows/codeql.yml) | CodeQL untuk `actions`, ditambah `python` begitu repo melacak file `.py`; tidak ada yang dikompilasi atau dijalankan | setiap pull request (aturan `CODE_SECURITY` yang sama) | Pemindaian kode tanpa pemindaian terjadwal mingguan |
 | [`workflows-lint.yml`](.github/workflows/workflows-lint.yml) | actionlint dengan ShellCheck, zizmor, dan pinact pada file workflow | pull request yang mengubah `.github/`; jangan jadikan required check | Action yang tidak di-pin dan langkah `run:` yang bisa disusupi tertangkap saat review |
-| [`deepseek-review.yml`](.github/workflows/deepseek-review.yml) | Memasang komentar review AI di pull request | pull request ke `dev` dibuka, atau kolaborator berkomentar `/ask-deepseek` | Pendapat kedua untuk setiap perubahan, sesuai permintaan; opsional |
-| [`strip-ai-on-pr.yml`](.github/workflows/strip-ai-on-pr.yml) | Menghapus lapisan AI dari `prod`, me-merge `prod` kembali ke `dev`, dan memverifikasi keduanya | pull request ke `prod` di-merge | Lapisan ini tidak pernah terkirim, dan `dev` tetap menyimpannya |
-| [`ci-cd.yml`](.github/workflows/ci-cd.yml) | Memicu webhook deploy platform Anda lewat `trigger-deploy.sh`, dengan percobaan ulang | pull request ke `prod` di-merge; butuh `DEPLOY_WEBHOOK_URL` | Hanya merge yang sudah di-review yang men-deploy, dan platform membangun dari git |
+| [`deepseek-review.yml`](.github/workflows/deepseek-review.yml) | Memasang review DeepSeek sebagai satu komentar, diperbarui di setiap run, lewat reusable workflow `deepseek-review`; butuh `DEEPSEEK_API_KEY` | pull request ke `dev` dibuka, dibuka ulang, atau ditandai siap, atau kolaborator berkomentar `/ask-deepseek` | Pendapat kedua untuk setiap perubahan, sesuai permintaan; opsional |
+| [`strip-ai-on-pr.yml`](.github/workflows/strip-ai-on-pr.yml) | Menghapus lapisan AI dari `prod`, me-merge `prod` kembali ke `dev`, dan memverifikasi keduanya, lewat reusable workflow `strip-ai` (daftarnya ditambah `promote-deploy-logs`, sama dengan daftar di `strip-paths.sh`) | pull request ke `prod` di-merge | Lapisan ini tidak pernah terkirim, dan `dev` tetap menyimpannya |
+| [`ci-cd.yml`](.github/workflows/ci-cd.yml) | Memicu webhook deploy platform Anda lewat reusable workflow deploy-webhook milik agent-config-kit, dengan percobaan ulang | pull request ke `prod` di-merge; butuh `DEPLOY_WEBHOOK_URL` | Hanya merge yang sudah di-review yang men-deploy, dan platform membangun dari git |
 | [`PULL_REQUEST_TEMPLATE/`](.github/PULL_REQUEST_TEMPLATE/dev.md) | `dev.md` (ringkasan, cara verifikasi, checklist) dan `promotion.md` (commit yang dipromosikan, pemeriksaan sebelum dan sesudah merge) | `/create-pr` dan `/promote` mengisinya | Setiap pull request menjawab pertanyaan yang sama |
 
 Logika workflow disimpan di `.github/scripts/`, sehingga `/promote-deploy` bisa menjalankan
@@ -830,17 +943,17 @@ langkah yang sama secara manual saat CI tidak bisa:
 | [`quality-gate.sh`](.github/scripts/quality-gate.sh) | Setiap pemeriksaan gate ditambah yang khusus CI: audit keamanan, tidak ada `.env` yang di-commit, aturan komentar, build produksi, tes integrasi saat `DATABASE_URL` diisi. Mendaftar setiap pemeriksaan yang tidak berjalan | `bash .github/scripts/quality-gate.sh origin/dev` sebelum membuka pull request; `--strict` mengubah pemeriksaan yang dilewati menjadi kegagalan, seperti di runner | Pull request gagal di laptop Anda lebih dulu |
 | [`check-comment-blocks.sh`](.github/scripts/check-comment-blocks.sh) | Gagal jika ada blok komentar lebih dari dua baris di `.github/` | `bash .github/scripts/check-comment-blocks.sh` | Penjelasan tinggal di dokumentasi, tempat ia tetap diperbarui |
 | [`strip-paths.sh`](.github/scripts/strip-paths.sh) | Satu-satunya daftar apa yang dihapus strip dari `prod` | Di-source oleh tiga skrip strip; ubah file ini untuk mengubah apa yang dikirim | Ketiga skrip tidak pernah berbeda pendapat |
-| [`strip-ai.sh`](.github/scripts/strip-ai.sh) | Menghapus lapisan AI dari `prod`, lalu commit dan push | Dijalankan `strip-ai-on-pr.yml`; oleh Anda dengan `!` saat `/promote-deploy` | Lapisan ini tidak pernah sampai ke produksi |
+| [`strip-ai.sh`](.github/scripts/strip-ai.sh) | Menghapus lapisan AI dari `prod`, lalu commit dan push | Dijalankan oleh Anda dengan `!` saat `/promote-deploy`; `strip-ai-on-pr.yml` menghapus daftar yang sama di CI | Lapisan ini tidak pernah sampai ke produksi |
 | [`back-merge-prod.sh`](.github/scripts/back-merge-prod.sh) | Me-merge `prod` kembali ke `dev` dan memasang lagi lapisannya | Sama dengan `strip-ai.sh` | `dev` tetap menyimpan lapisan ini setelah setiap rilis |
 | [`verify-strip.sh`](.github/scripts/verify-strip.sh) | Memeriksa bahwa `prod` kehilangan setiap path yang di-strip dan `dev` masih memilikinya; hanya membaca | Dijalankan setelah dua skrip di atas | Strip yang setengah jalan gagal dengan jelas, bukan diam-diam |
-| [`trigger-deploy.sh`](.github/scripts/trigger-deploy.sh) | Mengirim request ke `DEPLOY_WEBHOOK_URL`, mencoba ulang selama build menolak koneksi | Dijalankan `ci-cd.yml`; `/promote-deploy` menyebutnya untuk deploy manual | Satu hook deploy netral-vendor untuk platform apa pun |
+| [`trigger-deploy.sh`](.github/scripts/trigger-deploy.sh) | Mengirim request ke `DEPLOY_WEBHOOK_URL`, mencoba ulang selama build menolak koneksi | `/promote-deploy` menyebutnya untuk deploy manual; `ci-cd.yml` memanggil webhook yang sama di CI | Satu hook deploy netral-vendor untuk platform apa pun |
 
 ### File konfigurasi
 
 | Nama | Fungsinya | Cara pakai | Manfaatnya |
 | :--- | :--- | :--- | :--- |
 | [`CLAUDE.md`](CLAUDE.md) | Router: gambaran proyek, gate kualitas, file mana yang dibaca untuk tugas apa. Dimuat setiap sesi | Isi placeholder-nya; jaga tetap pendek | Konteks yang selalu dimuat tetap cukup kecil untuk dibaca |
-| [`AGENTS.md`](AGENTS.md) | 27 aturan bernomor dalam tujuh bagian, masing-masing menyebut pemeriksaannya atau `advisory`, serta tabel Compliance Status | Isi tabelnya; tambahkan aturan di akhir, jangan pernah mengubah nomor | Review mengutip "Rule 15", dan pemeriksaan menegakkannya |
+| [`AGENTS.md`](AGENTS.md) | 32 aturan bernomor dalam delapan bagian, masing-masing menyebut pemeriksaannya atau `advisory` (§P hanya berlaku bila kontrak payload diadopsi), serta tabel Compliance Status | Isi tabelnya; tambahkan aturan di akhir, jangan pernah mengubah nomor | Review mengutip "Rule 15", dan pemeriksaan menegakkannya |
 | [`SSOT.md`](SSOT.md) | Fakta yang mendasari aturan: struktur modul, aturan lapisan, variabel lingkungan | Jaga tetap benar seiring kode berubah | Satu tempat untuk fakta, sehingga aturan tidak mengulanginya |
 | [`.claude/settings.json`](.claude/settings.json) | Wiring hook, daftar izin `allow`/`ask`/`deny`, dan sandbox Bash. Daftar `deny` mencegah Claude membaca atau mengedit file `.env*` asli dan mengedit `AGENTS.md`, `SSOT.md`, serta `.claude/state/` | Ubah seperti kode; pengaturan pribadi masuk ke `.claude/settings.local.json` | Sistem izin dan sandbox menopang hook, dan buku aturan hanya berubah saat Anda mengubahnya |
 | [`.claude/agent-config.example.json`](.claude/agent-config.example.json) | Setiap pengaturan hook beserta nilai bawaan dan penjelasannya | Salin key yang Anda ubah ke `.claude/agent-config.json` | Menyetel satu aturan tanpa mengubah hook |
@@ -852,6 +965,7 @@ langkah yang sama secara manual saat CI tidak bisa:
 | [`.dockerignore`](.dockerignore) | Menjaga setiap file `.env*`, `.git`, `.github`, dan seluruh lapisan AI di luar build context | Letakkan di samping `Dockerfile` Anda | `COPY . .` tidak bisa memanggang rahasia atau lapisan ini ke dalam image |
 | [`.gitleaks.toml`](.gitleaks.toml) | Mempertahankan aturan bawaan gitleaks dan hanya mengizinkan dua pola sempit; tidak ada path yang dikecualikan | Tambah pola hanya untuk false positive yang terbukti | Pemindaian rahasia tetap berfungsi, bukan sekadar hiasan |
 | [`.skillspector-baseline.yaml`](.skillspector-baseline.yaml) | Catatan triase pemindai skill: setiap temuan yang diterima beserta alasannya | Review setiap perubahannya secara manual | Daftar temuan yang diabaikan tetap pendek dan terlihat |
+| [`payload.config.json`](payload.config.json) (opsional) | Saklar kontrak payload yang di-commit (`strict`), pengecualian beserta alasannya, dan peer | Disalin saat Anda [mengadopsi kontraknya](#enkripsi-payload-body-tersegel-dan-satu-registry-endpoint); `PAYLOAD_MODE` di shell Anda sendiri menimpanya hanya untuk debugging lokal | Setiap pengecualian enkripsi adalah satu baris yang di-review beserta alasannya |
 | [`.github/CODEOWNERS`](.github/CODEOWNERS) | Meminta review untuk hook, pengaturan, gate, workflow, dan file yang menentukan apa yang sampai ke produksi | Ganti `your-github-handle` | Perubahan satu baris yang mematikan guard mendapat pemeriksaan kedua |
 | [`docs/unlock.md`](docs/unlock.md) | Kunci `env` dan `db`: apa yang dihentikannya, cara Anda membukanya, apa yang tidak dihentikannya | Baca sekali; Claude membacanya saat kunci menghalangi | Anda tahu persis arti "terkunci" |
 | [`.markdownlint-cli2.jsonc`](.markdownlint-cli2.jsonc) | Pengaturan lint untuk dokumentasi template ini sendiri; tidak disalin ke repo Anda | `markdownlint-cli2` | Dokumentasi tetap mudah dibaca |
@@ -1102,9 +1216,10 @@ Workflow-nya sendiri tercantum di [Workflow CI](#workflow-ci). Bagian ini berisi
 mereka pegang bersama, dan hal-hal yang butuh penjelasan lebih panjang daripada komentar dua baris.
 
 **Yang dipegang setiap workflow.** `permissions: contents: read` di tingkat atas, dan job yang
-menulis meminta izinnya di tingkat job. `persist-credentials: false` di setiap checkout kecuali job
-strip, yang melakukan push dengan token itu. Setiap `uses:` adalah SHA commit lengkap dengan
-versinya di komentar, dan image service membawa digest. Data event masuk ke langkah `run:` lewat
+menulis meminta izinnya di tingkat job. `persist-credentials: false` di setiap checkout; job strip
+mendapat tokennya lewat credential helper git. Setiap `uses:` adalah SHA commit lengkap dengan
+versinya di komentar, dan image service membawa digest; reusable workflow milik agent-config-kit
+di-pin dengan cara yang sama, ke commit rilis v1.2.0-nya. Data event masuk ke langkah `run:` lewat
 `env:`, tidak pernah sebagai ekspresi di dalam skrip. Setiap job punya `timeout-minutes`.
 
 **Pembaruan tanpa bot.** Perbarui dengan sengaja, di pull request biasa yang kemudian diperiksa
@@ -1143,7 +1258,7 @@ repositori sungguhan. [SETUP § 6](SETUP.md#6-make-the-gate-runnable) membahas s
 | Pengaturan | Di mana | Nilai |
 | :--- | :--- | :--- |
 | Squash merging | Settings → General → Pull Requests | **Mati.** `/merge-pr` dan `/promote` melakukan merge dengan `--merge` |
-| `DEEPSEEK_CODE_REVIEW_TOKEN` | secret, opsional | hanya jika Anda mempertahankan `deepseek-review.yml` |
+| `DEEPSEEK_API_KEY` | secret, opsional | hanya jika Anda mempertahankan `deepseek-review.yml` |
 | `DEPLOY_WEBHOOK_URL` | secret, opsional | webhook deploy platform Anda, hanya jika Anda mempertahankan `ci-cd.yml` |
 | `CODE_SECURITY` | variabel, repositori privat | `true` setelah repositori punya GitHub Code Security; sebelum itu dependency review dan CodeQL dilewati, dan `/merge-pr` bertanya dulu sebelum menerima check yang dilewati |
 | `CI_RUNNER`, `CI_RUNNER_FAST` | variabel, opsional | label runner; jika kosong berarti `ubuntu-latest` |
@@ -1152,6 +1267,30 @@ repositori sungguhan. [SETUP § 6](SETUP.md#6-make-the-gate-runnable) membahas s
 Semua yang dibutuhkan lapisan ini gratis di repositori publik. Di repositori privat, ruleset dan
 GitHub Code Security adalah fitur berbayar; cek halaman harga GitHub, karena paketnya bisa
 berubah.
+
+**Job mana berjalan di mana.** Tempatkan job menurut siapa yang menunggu hasilnya, bukan menurut
+seberapa berat kelihatannya. Gate yang memblokir merge adalah satu-satunya job yang tidak boleh mati
+atau macet, jadi hanya `quality-gate.yml` yang membaca `CI_RUNNER_FAST` lebih dulu. Semua yang boleh
+gagal tanpa memblokir siapa pun (review AI, pemindaian, lint workflow, deploy dan strip setelah
+merge) berjalan di `CI_RUNNER`, tempat menit paling murah. GitHub membulatkan setiap job ke atas
+menjadi satu menit penuh, jadi runner yang lebih cepat tidak menghemat apa pun untuk job yang sudah
+selesai di bawah satu menit. Penyedia mana pun bisa dipakai: workflow hanya membaca labelnya.
+
+**Memakai dua pool gratis.** Di repositori publik, runner yang di-host GitHub gratis tanpa batas
+menit: biarkan kedua variabel kosong. Repositori privat di paket Free mendapat 2.000 menit sebulan,
+dan pool pihak ketiga seperti Blacksmith menambah menit gratisnya sendiri (3.000 sebulan). Pakai
+keduanya: pasang GitHub app milik penyedia itu, lalu arahkan gate ke labelnya dan biarkan
+`CI_RUNNER` kosong, supaya job lain memakai menit GitHub.
+
+```bash
+gh variable set CI_RUNNER_FAST --body blacksmith-2vcpu-ubuntu-2404   # gate di pool kedua
+gh variable set CI_RUNNER --body blacksmith-2vcpu-ubuntu-2404        # hanya saat menit GitHub habis
+gh variable delete CI_RUNNER                                         # saat bulan berganti
+```
+
+Kuota bisa berubah, jadi cek kedua halaman harga sebelum mengandalkannya.
+[`.claude/CI-RUNNERS.example.md`](.claude/CI-RUNNERS.example.md) berisi uji anggaran yang perlu
+dijalankan sebelum memindahkan job, dan jalan keluar bila sebuah pool hilang.
 
 ## Melayani request atau pipeline?
 
@@ -1217,13 +1356,15 @@ Anda baca sebelum mengadopsi apa pun.
 
 | Apa | Biaya |
 | :--- | :--- |
-| Konteks yang dimuat di setiap sesi | 11.705 byte: `CLAUDE.md` (7.427) dan `working-agreements.md` (4.278); `ai-config.sh` gagal di atas 15.000 |
-| Konteks yang dimuat sesuai kebutuhan | 11 aturan per path (total 37.469 byte), masing-masing hanya saat file yang cocok sedang dikerjakan |
+| Konteks yang dimuat di setiap sesi | 12.078 byte: `CLAUDE.md` (7.522) dan `working-agreements.md` (4.556); `ai-config.sh` gagal di atas 15.000 |
+| Konteks yang dimuat sesuai kebutuhan | 12 aturan per path (total 39.628 byte), masing-masing hanya saat file yang cocok sedang dikerjakan |
 | Deskripsi perintah dan subagen yang didaftar Claude Code | 3.309 byte untuk 15 perintah dan satu subagen |
 | `safety-check.sh` untuk satu perintah | sekitar 130 md (median): `git status`, force-push yang ditolak, dan test run yang di-pipe berada di kisaran 108–110 md sebelum aturan skrip guard, yang menambah sekitar 17% (versi lama dan baru dijalankan berdampingan) |
 | Hook lainnya | `db-guard.sh`, `mcp-guard.sh`, `migration-guard.sh`, `post-edit.sh` dengan ruff: sekitar 75–105 md; `post-commit.sh` setelah commit: sekitar 145 md; `prompt-intent.sh`, `session-start.sh`: sekitar 45–70 md |
 | Probe hook pada commit yang menyentuh sebuah hook | 2.333 probe dalam sekitar sembilan setengah menit (567 detik jika dijalankan sendiri); job CI memberi batas 20 menit |
 | CI | hanya pull request; tidak ada saat push, tidak ada yang terjadwal, tidak ada bot pembaruan |
+| Menit CI | gratis dan tanpa batas di repositori publik; 2.000 sebulan di paket Free GitHub untuk repositori privat. Setiap job dibulatkan ke atas menjadi satu menit penuh, jadi hanya gate yang memblokir merge yang layak mendapat pool cepat |
+| Pool gratis kedua | runner pihak ketiga seperti Blacksmith menambah menit gratisnya sendiri (3.000 sebulan) lewat `CI_RUNNER_FAST` dan `CI_RUNNER` ([Konfigurasi repositori GitHub](#konfigurasi-repositori-github)) |
 
 Diukur di Apple M5 dengan `/bin/bash` 3.2 macOS dan python3 3.14, median dari 25 kali jalan per
 hook, dengan load average antara 3 dan 4. Hook pada event yang sama berjalan berdampingan, dan
@@ -1333,7 +1474,7 @@ paths:
 - Amounts are integers in the smallest currency unit. Never floats.
 ```
 
-Setelah itu `bash scripts/check/ai-config.sh` tetap melaporkan 11.705 byte yang selalu dimuat.
+Setelah itu `bash scripts/check/ai-config.sh` tetap melaporkan 12.078 byte yang selalu dimuat.
 Tanpa daftar `paths:`, aturan itu akan dimuat di setiap sesi dan dihitung ke anggaran 15.000 byte.
 Aturan yang wajib diikuti tim juga perlu masuk ke `AGENTS.md`, dengan nomor dan pemeriksaan yang
 menegakkannya.
@@ -1368,6 +1509,7 @@ bash scripts/sync/workflows.sh && bash scripts/sync/workflows.sh --check
 | Docker | build produksi di gate |
 | `gh` | `pr-ready.sh` dan perintah yang membuka, me-merge, dan mempromosikan PR |
 | jq (opsional) | pembacaan payload hook yang lebih cepat, dan pembaca cadangan tanpa python3 |
+| `cryptography` dan `openssl` (opsional) | kontrak payload: cipher-nya, dan pembuatan kuncinya |
 
 ## FAQ dan pemecahan masalah
 
@@ -1494,7 +1636,8 @@ untuk itu.
 - **Peta jalan.** Tidak ada peta jalan bertanggal. Pekerjaan baru masuk lebih dulu ke
   [agent-config-kit](https://github.com/adhibuchori/agent-config-kit), sebagai plugin berversi, dan
   template ini mengikutinya; riwayat git-nya adalah catatan perubahannya.
-- **Sengaja di luar cakupan:** kode aplikasi, generator proyek, layanan TypeScript (lihat
+- **Sengaja di luar cakupan:** kode aplikasi (modul payload adalah referensi, bukan aplikasi),
+  generator proyek, layanan TypeScript (lihat
   [be-agent-config](https://github.com/adhibuchori/be-agent-config)), dan CI terjadwal dalam bentuk
   apa pun. Apa yang diputuskan kit untuk tidak dilakukan, dan alasannya:
   [.out-of-scope](https://github.com/adhibuchori/agent-config-kit/blob/main/.out-of-scope/README.md).
